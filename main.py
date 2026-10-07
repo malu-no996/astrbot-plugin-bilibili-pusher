@@ -12,6 +12,7 @@
 origin = "{platform_id}:GroupMessage:{group_id}"。
 """
 import asyncio
+import base64
 import io
 
 import httpx
@@ -188,12 +189,17 @@ class BilibiliPusherPlugin(Star):
         key = str(info.get("qrcode_key") or "")
         if not key:
             return error_response("申请登录二维码失败：B 站未返回 qrcode_key")
+        # 二维码直接以 base64 data URI 随 JSON 返回：
+        # 插件 API 需要登录 token（bridge 只给 apiGet/apiPost 自动加请求头），
+        # 裸 <img src="/qr.png"> 带不上鉴权头会 401，所以不能让前端单独再拉一次图片接口。
+        url = str(info.get("url") or "")
+        png = self._qr_png(url) if url else None
         return json_response(
             {
                 "ok": True,
                 "qrcode_key": key,
-                "url": str(info.get("url") or ""),
-                "png": f"{PREFIX}/qr.png?k={key}",
+                "url": url,
+                "png": f"data:image/png;base64,{base64.b64encode(png).decode()}" if png else "",
                 "expires_in": int(info.get("expires_in") or 180),
                 "qr_ready": self._qr_ready(),
             }

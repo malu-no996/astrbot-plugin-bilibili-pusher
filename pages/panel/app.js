@@ -102,7 +102,7 @@ async function loginStart() {
   if (!j.ok) { L.busy = false; L.tip = j.message || '获取二维码失败'; notify(j.message || '获取二维码失败', 'err'); render(); return; }
   L.key = j.qrcode_key;
   L.url = j.url;
-  L.png = j.qr_ready ? j.png : '';
+  L.png = j.png || '';
   L.tip = '请用哔哩哔哩 App 扫码（' + (j.expires_in || 180) + ' 秒内有效）';
   L.busy = false;
   render();
