@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>B 站面板</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="top">
+        <h1>B 站面板 <span class="hint">扫码登录 · 私信 · 关注 · 动态 · 直播 · 订阅推送</span></h1>
+        <span id="login-badge" class="badge offline">读取中…</span>
+      </header>
+      <nav class="tabs" id="tabs"></nav>
+      <main id="view"></main>
+      <div id="modal"></div>
+      <div id="toasts"></div>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

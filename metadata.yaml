@@ -1,0 +1,5 @@
+name: astrbot_plugin_bilibili_pusher
+desc: B 站订阅推送 —— 扫码登录 / 私信 / 关注 / 动态 / 直播浏览，UP 主动态与主播开播事件定时推送到指定会话
+version: v1.0.0
+author: malu
+repo: https://github.com/yourname/astrbot-plugin-bilibili-pusher
