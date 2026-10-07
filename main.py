@@ -6,7 +6,7 @@
 - 页面（pages/panel）：账号 / 私信 / 关注 / 动态 / 直播 / 动态订阅 / 直播订阅
 - 「动态推送」：UP 主 → 平台实例 → 群，定时拉取新动态推送到指定群
 - 「直播推送」：主播开播 / 下播事件推送到指定群
-- 命令（管理员）：b站状态 · b站私信 · b站动态 [UID]
+- 群内命令（事件监听实现，不出现在 AstrBot /help）：订阅/取消订阅/绑定B站推送
 
 推送统一走 AstrBot 的 context.send_message(统一会话 origin, 消息链)，
 origin = "{platform_id}:GroupMessage:{group_id}"。
@@ -1021,74 +1021,6 @@ class BilibiliPusherPlugin(Star):
             content_type=ctype or "application/octet-stream",
             headers={"Cache-Control": "private, max-age=86400"},
         )
-
-    # ==================================================================
-    # QQ/平台命令（管理员）
-    # ==================================================================
-
-    @filter.command("b站状态", alias={"B站状态", "b站登录状态", "bilibili状态"})
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def bili_status_cmd(self, event: AstrMessageEvent):
-        """查看 B 站登录状态与未读私信。"""
-        if not store.logged_in():
-            yield event.plain_result("B 站未登录：请在 WebUI 插件详情页的「B站面板」扫码登录")
-            return
-        user = store.user()
-        lines = [f"B 站已登录：{user.get('uname') or '（未知昵称）'}（UID {user.get('mid')}）"]
-        try:
-            unread = await client.unread()
-            lines.append(
-                f"未读私信：{unread.get('total', 0)}"
-                f"（关注 {unread.get('follow', 0)} / 陌生人 {unread.get('unfollow', 0)}）"
-            )
-        except Exception as exc:
-            lines.append(f"未读私信：读取失败（{exc}）")
-        yield event.plain_result("\n".join(lines))
-
-    @filter.command("b站私信", alias={"B站私信", "bilibili私信"})
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def bili_dm_cmd(self, event: AstrMessageEvent):
-        """查看 B 站私信会话列表。"""
-        if not store.logged_in():
-            yield event.plain_result("B 站未登录：先在 WebUI 插件详情页的「B站面板」扫码登录")
-            return
-        try:
-            items = await client.sessions(size=10)
-        except Exception as exc:
-            yield event.plain_result(f"读取私信失败：{exc}")
-            return
-        if not items:
-            yield event.plain_result("暂无私信会话")
-            return
-        lines = ["B 站私信会话（最多 10 条）："]
-        for s in items:
-            who = s.get("name") or f"UID {s.get('talker_id')}"
-            tail = f" · {s['unread']} 条未读" if s.get("unread") else ""
-            lines.append(f"- {who}{tail}：{s.get('last_text') or '（无内容）'}")
-        yield event.plain_result("\n".join(lines))
-
-    @filter.command("b站动态", alias={"B站动态", "bilibili动态"})
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def bili_dyn_cmd(self, event: AstrMessageEvent, uid: str = ""):
-        """查看某 UP 主的最近动态。用法：b站动态 [UID]"""
-        try:
-            data = await client.dynamics(uid)
-        except Exception as exc:
-            yield event.plain_result(f"读取动态失败：{exc}")
-            return
-        items = data.get("items") or []
-        if not items:
-            yield event.plain_result("没有拉到动态（该用户可能没有公开动态）")
-            return
-        lines = [
-            f"B 站动态 · {items[0].get('author') or ('UID ' + uid)}（最近 {min(3, len(items))} 条）："
-        ]
-        for d in items[:3]:
-            text = (d.get("text") or "").replace("\n", " ")
-            if len(text) > 60:
-                text = text[:60] + "…"
-            lines.append(f"- [{d.get('pub_time') or ''}] {text}")
-        yield event.plain_result("\n".join(lines))
 
 
 # AstrBot 会自动实例化插件类（metadata.yaml 提供名称/版本等元信息）。
