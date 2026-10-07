@@ -16,6 +16,18 @@
       <div id="modal"></div>
       <div id="toasts"></div>
     </div>
-    <script type="module" src="./app.js"></script>
+    <!-- 按序加载：core（公共）→ 各子页签 → 弹窗 → 入口 -->
+    <script src="./js/core.js"></script>
+    <script src="./js/account.js"></script>
+    <script src="./js/dm.js"></script>
+    <script src="./js/follow.js"></script>
+    <script src="./js/feed.js"></script>
+    <script src="./js/lives.js"></script>
+    <script src="./js/subs.js"></script>
+    <script src="./js/livesubs.js"></script>
+    <script src="./js/modals.js"></script>
+    <script src="./js/cmds.js"></script>
+    <script src="./js/data.js"></script>
+    <script src="./js/main.js"></script>
   </body>
 </html>

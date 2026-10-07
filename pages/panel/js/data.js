@@ -1,0 +1,81 @@
+/* 子页签：数据（概览 / 缓存清理 / 命令订阅记录 / 数据文件清单） */
+
+async function loadData() {
+  const D = S.data;
+  D.loading = true; render();
+  const [o, r] = await Promise.all([GET('data/overview'), GET('cmd_subs')]);
+  if (o.ok) D.overview = o; else notify(o.message || '读取数据概览失败', 'err');
+  if (r.ok) D.records = r.records || []; else notify(r.message || '读取命令订阅记录失败', 'err');
+  D.loading = false;
+  render();
+}
+
+async function dataDelRec(id) {
+  if (!confirmBox('确定删除这条命令订阅记录？删除后该群不再收到这条命令订阅的推送。')) return;
+  const j = await POST('cmd_subs/delete', { id });
+  notify(j.message || (j.ok ? '已删除' : '删除失败'), j.ok ? 'ok' : 'err');
+  await loadData();
+}
+
+async function dataClearRecs() {
+  const D = S.data;
+  if (!D.records.length) return;
+  if (!confirmBox(`确定清空全部 ${D.records.length} 条命令订阅记录？这些群将不再收到命令订阅的推送。`)) return;
+  const j = await POST('cmd_subs/clear', {});
+  notify(j.message || '已清空', 'ok');
+  await loadData();
+}
+
+async function dataClearCache(kind) {
+  const j = await POST('data/cache/clear', kind === 'page' ? { page: true } : { images: true });
+  notify(j.message || '已清空', j.ok ? 'ok' : 'err');
+  await loadData();
+}
+
+function renderData() {
+  const D = S.data;
+  const o = D.overview || {};
+  const c = o.counts || {};
+  const cache = o.cache || {};
+  const imgs = cache.images || {};
+  let html = `<div class="flex" style="margin-bottom:12px">
+    <span class="badge online">面板订阅 ${c.subs ?? '-'}</span>
+    <span class="badge online">直播订阅 ${c.live_subs ?? '-'}</span>
+    <span class="badge online">命令订阅 ${c.cmd_subs ?? '-'}</span>
+    <span class="badge online">推送记录 ${c.push_state ?? '-'}</span>
+    <span style="flex:1"></span>
+    <button class="ghost" data-act="dataReload" ${D.loading ? 'disabled' : ''}>刷新</button>
+  </div>`;
+  html += `<div class="card"><h2>缓存</h2>
+    <div class="row"><label>页面缓存</label><span>${cache.page_cache ?? 0} 条</span>
+      <button class="ghost" data-act="dataClearPage" ${D.loading ? 'disabled' : ''}>清空</button></div>
+    <div class="row"><label>图片缓存</label><span>${imgs.count ?? 0} 个（${fmtSize(imgs.bytes || 0)}）</span>
+      <button class="ghost" data-act="dataClearImages" ${D.loading ? 'disabled' : ''}>清空</button></div>
+  </div>`;
+  html += `<div class="card"><h2>命令订阅记录${D.records.length ? `（共 ${D.records.length} 条）` : ''}</h2>
+    <p class="muted" style="margin-top:0">群内发「<b>订阅B站推送 UP主UID</b>」产生的订阅（{qq_id, group_id, platform, bilibili_id}），这些群也参与定时推送（全类型动态）。面板手动加的订阅在「动态订阅」页管理。</p>
+    <div class="actions" style="margin:0 0 10px"><button class="red" data-act="dataClearRecs" ${D.loading || !D.records.length ? 'disabled' : ''}>清空全部记录</button></div>`;
+  if (!D.records.length) {
+    html += `<p class="muted">暂无记录</p>`;
+  } else {
+    html += `<table><thead><tr><th>UP 主</th><th>群 ID</th><th>平台</th><th>平台实例</th><th>订阅者</th><th>订阅时间</th><th></th></tr></thead><tbody>`;
+    for (const r of D.records) {
+      html += `<tr>
+        <td>${esc(r.uname || '-')}<div class="muted">UID ${esc(r.bilibili_id)}</div></td>
+        <td>${esc(r.group_id || '-')}</td>
+        <td>${esc(platformLabel(r.platform))}</td>
+        <td>${esc(r.platform_id || '-')}</td>
+        <td>${esc(r.qq_id || '-')}</td>
+        <td>${fmt(r.created_at)}</td>
+        <td><button class="red" data-act="dataDel" data-arg="${esc(r.id)}">删除</button></td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+  html += `</div>`;
+  html += `<div class="card"><h2>数据文件（data/ 目录）</h2>
+    <table><thead><tr><th>文件</th><th>大小</th></tr></thead><tbody>
+    ${(o.files || []).map(f => `<tr><td>${esc(f.name)}</td><td>${fmtSize(f.size)}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">空</td></tr>'}
+    </tbody></table></div>`;
+  return html;
+}
