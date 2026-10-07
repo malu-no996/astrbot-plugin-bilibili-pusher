@@ -23,7 +23,7 @@ from astrbot.api.star import Context, Star
 from astrbot.api.web import error_response, json_response, request
 
 from . import bili
-from .bili import client, imgcache, live_pusher, live_subs, pusher, sender, store, subs
+from .bili import client, imgcache, live_pusher, live_subs, pusher, sender, store, subs, webcache
 
 PLUGIN_NAME = "astrbot_plugin_bilibili_pusher"
 
@@ -234,10 +234,14 @@ class BilibiliPusherPlugin(Star):
                 {"ok": False, "status": "error", "message": f"轮询异常：{type(exc).__name__}: {exc}"},
                 status_code=500,
             )
+        # 换账号登录成功：上一账号的页面缓存全部作废
+        if isinstance(result, dict) and result.get("status") == "success":
+            webcache.clear()
         return json_response({"ok": True, **(result if isinstance(result, dict) else {})})
 
     async def api_logout(self):
         store.clear()
+        webcache.clear()   # 换账号了，页面缓存必须清
         return json_response({"ok": True, "message": "已退出 B 站登录（本地凭证已清除）"})
 
     async def api_refresh(self):
@@ -260,11 +264,22 @@ class BilibiliPusherPlugin(Star):
     async def api_sessions(self):
         session_type = request.query.get("session_type", 1, type=int)
         size = request.query.get("size", 20, type=int)
+        key = f"sessions:{session_type}:{size}"
+        if request.query.get("force") != "1":
+            hit = webcache.get(key)
+            if hit is not None:
+                return json_response({"ok": True, "cached": True, "sessions": hit})
         err, items = await self._call(
             client.sessions(session_type=session_type, size=size), "读取私信会话失败"
         )
         if err:
+            # B 站请求失败时退回缓存（聊胜于无）
+            hit = webcache.get(key)
+            if hit is not None:
+                return json_response({"ok": True, "cached": True, "sessions": hit})
             return err
+        if isinstance(items, list):
+            webcache.put(key, items)
         return json_response({"ok": True, "sessions": items if isinstance(items, list) else []})
 
     async def api_messages(self):
@@ -276,40 +291,91 @@ class BilibiliPusherPlugin(Star):
         return json_response({"ok": True, "messages": items if isinstance(items, list) else []})
 
     async def api_dynamics(self):
-        """指定 UID 的空间动态（未登录也能拉，走 WBI 签名 + 设备指纹）。"""
+        """指定 UID 的空间动态（未登录也能拉，走 WBI 签名 + 设备指纹）。
+
+        只缓存第一页（offset 为空）；「加载更多」的 offset 请求不缓存。
+        """
         uid = request.query.get("uid", "")
         offset = request.query.get("offset", "")
+        key = f"dyn:{uid}"
+        cacheable = not offset
+        if cacheable and request.query.get("force") != "1":
+            hit = webcache.get(key)
+            if hit is not None:
+                return json_response({"ok": True, "cached": True, **hit})
         err, data = await self._call(client.dynamics(uid, offset=offset), "读取动态失败")
         if err:
             return err
-        return json_response({"ok": True, **(data if isinstance(data, dict) else {})})
+        data = data if isinstance(data, dict) else {}
+        if cacheable and data:
+            webcache.put(key, data)
+        return json_response({"ok": True, **data})
 
     async def api_feed(self):
-        """登录账号关注的动态流（需登录）。type: all / video / pgc / article。"""
+        """登录账号关注的动态流（需登录）。type: all / video / pgc / article。
+
+        只缓存第一页（offset 为空）；「加载更多」的 offset 请求不缓存。
+        """
         offset = request.query.get("offset", "")
         dtype = request.query.get("type", "all")
+        key = f"feed:{dtype}"
+        cacheable = not offset
+        if cacheable and request.query.get("force") != "1":
+            hit = webcache.get(key)
+            if hit is not None:
+                return json_response({"ok": True, "cached": True, **hit})
         err, data = await self._call(client.feed(offset=offset, dtype=dtype), "读取动态失败")
         if err:
             return err
-        return json_response({"ok": True, **(data if isinstance(data, dict) else {})})
+        data = data if isinstance(data, dict) else {}
+        if cacheable and data:
+            webcache.put(key, data)
+        return json_response({"ok": True, **data})
 
     async def api_follow_tags(self):
+        key = "follow_tags"
+        if request.query.get("force") != "1":
+            hit = webcache.get(key)
+            if hit is not None:
+                return json_response({"ok": True, "cached": True, "tags": hit})
         err, tags = await self._call(client.follow_tags(), "读取关注分组失败")
         if err:
             return err
+        if isinstance(tags, list):
+            webcache.put(key, tags)
         return json_response({"ok": True, "tags": tags if isinstance(tags, list) else []})
 
     async def api_followings(self):
         """登录账号的关注列表（需登录）。
 
         tagid 为空 / -1 = 全部，其余为分组 id；kw 非空时按昵称模糊搜索（忽略分组与翻页）。
+        搜索结果不缓存（每次都是手动触发）；普通分页结果缓存，手动「刷新列表」传 force=1。
         """
         pn = request.query.get("pn", 1, type=int)
         ps = request.query.get("ps", 50, type=int)
         tagid = request.query.get("tagid", "")
         kw = request.query.get("kw", "")
+        force = request.query.get("force") == "1"
+        if not kw:
+            key = f"followings:{pn}:{ps}:{tagid}"
+            if not force:
+                hit = webcache.get(key)
+                if hit is not None:
+                    return json_response({"ok": True, "cached": True, **hit})
+            err, data = await self._call(
+                client.followings(pn=pn, ps=ps, tagid=tagid, kw=kw), "读取关注列表失败"
+            )
+            if err:
+                hit = webcache.get(key)
+                if hit is not None:
+                    return json_response({"ok": True, "cached": True, **hit})
+                return err
+            data = data if isinstance(data, dict) else {}
+            if data:
+                webcache.put(key, data)
+            return json_response({"ok": True, **data})
         err, data = await self._call(
-            client.followings(pn=pn, ps=ps, tagid=tagid, kw=kw), "读取关注列表失败"
+            client.followings(pn=pn, ps=ps, tagid=tagid, kw=kw), "搜索关注失败"
         )
         if err:
             return err

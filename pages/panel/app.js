@@ -173,10 +173,10 @@ function renderAccount() {
 
 /* ---------------- 私信（frag/dm） ---------------- */
 
-async function loadSessions() {
+async function loadSessions(force) {
   S.sessions.loading = true; S.sessions.error = '';
   render();
-  const j = await GET('sessions');
+  const j = await GET('sessions', force ? { force: 1 } : {});
   if (j.ok) S.sessions.list = j.sessions || [];
   else S.sessions.error = j.message || '读取私信会话失败';
   S.sessions.loading = false;
@@ -231,44 +231,22 @@ function renderDm() {
 }
 
 /* ---------------- 关注（frag/follow） ---------------- */
+/* 关注列表/分组的缓存已挪到后端（data/page_cache.json）：进页签自动读后端缓存，
+   点「刷新列表/刷新分组」才带 force=1 重新请求 B 站。前端不再用 localStorage
+   （AstrBot Page 在受限 iframe 里 localStorage 可能被浏览器禁掉）。 */
 
-const FOLLOW_CACHE_KEY = 'astrbot_bili_follow_cache_v1';
-
-function followSaveCache() {
-  try {
-    localStorage.setItem(FOLLOW_CACHE_KEY, JSON.stringify({
-      at: Math.floor(Date.now() / 1000), tagid: S.follow.tagid, pn: S.follow.pn,
-      total: S.follow.total, tags: S.follow.tags, list: S.follow.list,
-    }));
-  } catch (e) { /* ignore */ }
-}
-function followLoadCache() {
-  try {
-    const raw = localStorage.getItem(FOLLOW_CACHE_KEY);
-    if (!raw) return false;
-    const c = JSON.parse(raw);
-    if (!c || !Array.isArray(c.list) || !c.list.length) return false;
-    S.follow.list = c.list; S.follow.total = c.total || 0; S.follow.pn = c.pn || 1;
-    S.follow.tags = Array.isArray(c.tags) ? c.tags : [];
-    S.follow.tagid = typeof c.tagid === 'number' ? c.tagid : -1;
-    S.follow.fromCache = true;
-    return true;
-  } catch (e) { return false; }
-}
 function followClearCache() {
-  try { localStorage.removeItem(FOLLOW_CACHE_KEY); } catch (e) { /* ignore */ }
   S.follow.fromCache = false;
 }
 
-async function followTags() {
+async function followTags(force) {
   if (!S.state.logged) { S.follow.error = '读取关注分组需要先登录'; render(); return; }
-  const j = await GET('follow_tags');
+  const j = await GET('follow_tags', force ? { force: 1 } : {});
   if (j.ok) {
     S.follow.tags = j.tags || [];
     if (!S.follow.tags.some(t => t.tagid === S.follow.tagid)) S.follow.tagid = -1;
-    followSaveCache();
-    render();
-  }
+  } else if (force) S.follow.error = j.message || '读取关注分组失败';
+  render();
 }
 function followTag(tagid) {
   if (S.follow.tagid === tagid && !S.follow.searching) return;
@@ -288,16 +266,16 @@ async function followSearch() {
   } else S.follow.error = j.message || '搜索关注失败';
   S.follow.loading = false; render();
 }
-async function loadFollowings(pn) {
+async function loadFollowings(pn, force) {
   if (!S.state.logged) { S.follow.error = '查看关注列表需要先登录'; render(); return; }
   S.follow.loading = true; S.follow.error = ''; render();
   const params = { pn: pn || 1, ps: 50 };
   if (S.follow.tagid !== -1) params.tagid = S.follow.tagid;
+  if (force) params.force = 1;
   const j = await GET('followings', params);
   if (j.ok) {
     S.follow.list = j.items || []; S.follow.total = j.total || 0; S.follow.pn = j.pn || 1;
-    S.follow.fromCache = false;
-    followSaveCache();
+    S.follow.fromCache = !!j.cached;
   } else S.follow.error = j.message || '读取关注列表失败';
   S.follow.loading = false; render();
 }
@@ -315,7 +293,7 @@ function renderFollow() {
   html += `<div class="flex" style="margin-bottom:8px">
     ${f.total ? `<span class="muted">共 ${f.total} 个 · 第 ${f.pn} 页</span>` : (S.state.logged ? '' : '<span class="muted">需先在「账号」页签扫码登录</span>')}
     ${f.searching ? `<span class="muted">（搜索模式：已扫描 ${f.scanned} 个${f.scanned < f.total_all ? ' / 共 ' + f.total_all + ' 个关注' : ''}）</span>` : ''}
-    ${f.fromCache ? '<span class="badge" style="background:var(--warn-bg);color:var(--warn-text)">本地缓存 · 点「刷新列表」更新</span>' : ''}
+    ${f.fromCache ? '<span class="badge" style="background:var(--warn-bg);color:var(--warn-text)">缓存数据 · 点「刷新列表」更新</span>' : ''}
   </div>`;
   if (f.tags.length) {
     html += `<div class="flex" style="margin-bottom:12px">`;
@@ -361,7 +339,7 @@ function renderFollow() {
 
 function dynReset() { S.dyn.list = []; S.dyn.offset = ''; S.dyn.error = ''; }
 
-async function loadDynamics(offset) {
+async function loadDynamics(offset, force) {
   const d = S.dyn;
   const follow = d.source === 'follow';
   if (follow && !S.state.logged) { d.error = '查看「我关注的」动态需要先扫码登录'; render(); return; }
@@ -373,6 +351,7 @@ async function loadDynamics(offset) {
     if (!uid) { d.error = '缺少 UP 主 UID'; render(); return; }
     params.uid = uid;
   }
+  if (force) params.force = 1;
   d.loading = true; d.error = ''; render();
   const j = await GET(follow ? 'feed' : 'dynamics', params);
   if (j.ok) {
@@ -385,7 +364,7 @@ function dynSpace(mid, uname) {
   dynReset();
   S.dyn.source = 'space'; S.dyn.uid = String(mid || ''); S.dyn.uname = uname || '';
   S.tab = 'feed';
-  loadDynamics('');
+  loadDynamics('', true);   // 手动点进来的：直接拉最新的
 }
 function dynBack() {
   dynReset();
@@ -1112,11 +1091,12 @@ function render() {
 /* 进入子页签时的拉取（对应原 biliSwitch 的 onEnter） */
 function switchTab(id) {
   S.tab = id;
-  if (id === 'dm' && S.state.logged && !S.sessions.list.length) loadSessions();
+  if (id === 'dm' && S.state.logged && !S.sessions.list.length) loadSessions();   // 先读后端缓存
   if (id === 'subs') { loadSubs(); pushCfgLoad(); }
   if (id === 'livesubs') { loadLiveSubs(); livePushCfgLoad(); }
+  if (id === 'feed' && S.dyn.source === 'follow' && S.state.logged && !S.dyn.list.length && !S.dyn.loading && !S.dyn.error) loadDynamics('');   // 有缓存秒显，没缓存拉一次
   if (id === 'follow' && !S.state.logged) { followClearCache(); S.follow.list = []; S.follow.total = 0; }
-  else if (id === 'follow' && !S.follow.list.length && !S.follow.loading) followLoadCache();
+  else if (id === 'follow' && !S.follow.list.length && !S.follow.loading) loadFollowings();   // 后端缓存
   render();
 }
 
@@ -1135,15 +1115,15 @@ function stateSet(path, value) {
 const ACTIONS = {
   switchTab: (id) => switchTab(id),
   refreshState, loginStart, logout, refreshToken,
-  loadSessions: () => loadSessions(),
+  loadSessions: () => loadSessions(true),   // 「刷新会话」按钮 = 强制拉新
   openSession: (talkerId) => { const s = S.sessions.list.find(x => String(x.talker_id) === String(talkerId)); if (s) openSession(s); },
-  followSearch, followTags: () => followTags(),
+  followSearch, followTags: () => followTags(true),
   followTag: (id) => followTag(Number(id)),
-  followings1: () => loadFollowings(1),
+  followings1: () => loadFollowings(1, true),   // 「刷新列表」按钮 = 强制拉新
   followPrev: () => loadFollowings(S.follow.pn - 1),
   followNext: () => loadFollowings(S.follow.pn + 1),
   followDyn: (mid) => { const u = S.follow.list.find(x => String(x.mid) === String(mid)) || (S.finder.user && String(S.finder.user.mid) === String(mid) ? S.finder.user : null); followDyn(u || { mid, uname: '' }); },
-  dynLoad: () => loadDynamics(''),
+  dynLoad: () => loadDynamics('', true),   // 「拉取动态」按钮 = 强制拉新
   dynMore: () => loadDynamics(S.dyn.offset),
   dynBack,
   openImg: (u) => openImg(u),
