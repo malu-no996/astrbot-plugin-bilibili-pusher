@@ -65,7 +65,7 @@ const S = {
   login: { busy: false, tip: '', key: '', url: '', timer: null },
   sessions: { loading: false, list: [], error: '' },
   msgs: { loading: false, talker: '', name: '', list: [], error: '' },
-  follow: { loading: false, list: [], total: 0, pn: 1, error: '', tags: [], tagid: -1, kw: '', searching: false, scanned: 0, total_all: 0, fromCache: false },
+  follow: { loading: false, list: [], total: 0, pn: 1, error: '', tags: [], tagid: -1, kw: '', searching: false, search_src: '', scanned: 0, total_all: 0, fromCache: false },
   dyn: { loading: false, source: 'follow', type: 'all', uid: '', uname: '', offset: '', list: [], error: '' },
   lives: { loading: false, list: [], total_live: 0, error: '', scanned: 0, has_more: false, next_pn: 1 },
   subs: { loading: false, list: [], error: '' },

@@ -18,16 +18,31 @@ async function followTags(force) {
 }
 function followTag(tagid) {
   if (S.follow.tagid === tagid && !S.follow.searching) return;
-  S.follow.tagid = tagid; S.follow.pn = 1; S.follow.kw = ''; S.follow.searching = false;
+  S.follow.tagid = tagid; S.follow.pn = 1; S.follow.kw = ''; S.follow.searching = false; S.follow.search_src = '';
   loadFollowings(1);
 }
-function followSearch() {
-  // 搜索 = 直接在缓存里的关注列表上过滤，不发任何请求
+async function followSearch() {
   const kw = (S.follow.kw || '').trim();
-  if (!kw) { S.follow.searching = false; S.follow.error = ''; render(); return; }
-  if (!S.follow.list.length) { S.follow.error = '先点「刷新列表」拉一次关注列表（有缓存后搜索就是本地过滤，不请求 B 站）'; render(); return; }
-  S.follow.searching = true; S.follow.error = '';
-  render();
+  if (!kw) { S.follow.searching = false; S.follow.search_src = ''; S.follow.error = ''; render(); return; }
+  if (!S.state.logged) { S.follow.error = '搜索关注需要先登录'; render(); return; }
+  // 第一步：先在缓存列表里搜（不发任何请求）
+  const low = kw.toLowerCase();
+  const hits = S.follow.list.filter(u => (u.uname || '').toLowerCase().includes(low));
+  if (hits.length) {
+    S.follow.searching = true; S.follow.search_src = 'local'; S.follow.error = '';
+    render();
+    return;
+  }
+  // 第二步：缓存里搜不到 → 请求 B 站接口扫全部关注（后端按关键词缓存，同词再搜不重复打 B 站）
+  S.follow.loading = true; S.follow.error = ''; render();
+  const j = await GET('followings', { kw, ps: 50 });
+  if (j.ok) {
+    S.follow.list = j.items || []; S.follow.total = j.total || 0; S.follow.pn = 1;
+    S.follow.searching = true; S.follow.search_src = 'api';
+    S.follow.scanned = j.scanned || 0; S.follow.total_all = j.total_all || 0;
+    S.follow.fromCache = !!j.cached;
+  } else S.follow.error = j.message || '搜索关注失败';
+  S.follow.loading = false; render();
 }
 async function loadFollowings(pn, force) {
   if (!S.state.logged) { S.follow.error = '查看关注列表需要先登录'; render(); return; }
@@ -38,6 +53,7 @@ async function loadFollowings(pn, force) {
   const j = await GET('followings', params);
   if (j.ok) {
     S.follow.list = j.items || []; S.follow.total = j.total || 0; S.follow.pn = j.pn || 1;
+    S.follow.searching = false; S.follow.search_src = '';
     S.follow.fromCache = !!j.cached;
   } else S.follow.error = j.message || '读取关注列表失败';
   S.follow.loading = false; render();
@@ -53,11 +69,14 @@ function renderFollow() {
     <button class="ghost" data-act="followTags" ${!S.state.logged || f.loading ? 'disabled' : ''}>刷新分组</button>
     <button class="ghost" data-act="followings1" ${!S.state.logged || f.loading ? 'disabled' : ''}>刷新列表</button>
   </div>
-  <p class="muted" style="margin-top:2px">搜索 = 直接在缓存列表里按昵称过滤，<b>不请求 B 站</b>；列表以「刷新列表」拉到的为准。</p>`;
+  <p class="muted" style="margin-top:2px">搜索规则：<b>先搜缓存列表</b>（零请求）；缓存里搜不到，<b>再自动请求 B 站</b>扫全部关注（同一关键词的结果后端也缓存，重复搜不重复打 B 站）。清空搜索框恢复分页。</p>`;
+  const low = f.kw.trim().toLowerCase();
+  const localHits = (f.list || []).filter(u => (u.uname || '').toLowerCase().includes(low)).length;
   html += `<div class="flex" style="margin-bottom:8px">
     ${f.total ? `<span class="muted">共 ${f.total} 个 · 第 ${f.pn} 页</span>` : (S.state.logged ? '' : '<span class="muted">需先在「账号」页签扫码登录</span>')}
-    ${f.searching ? `<span class="muted">（搜索「${esc(f.kw.trim())}」：当前列表中匹配 ${(f.list || []).filter(u => (u.uname || '').toLowerCase().includes(f.kw.trim().toLowerCase())).length} 个）</span>` : ''}
-    ${f.fromCache ? '<span class="badge" style="background:var(--warn-bg);color:var(--warn-text)">缓存数据 · 点「刷新列表」更新</span>' : ''}
+    ${f.searching && f.search_src === 'local' ? `<span class="muted">（缓存中匹配 ${localHits} 个，零请求）</span>` : ''}
+    ${f.searching && f.search_src === 'api' ? `<span class="muted">（接口搜索：已扫描 ${f.scanned} 个${f.scanned < f.total_all ? ' / 共 ' + f.total_all + ' 个关注' : ''}${f.fromCache ? ' · 关键词结果来自缓存' : ''}）</span>` : ''}
+    ${f.fromCache && !f.searching ? '<span class="badge" style="background:var(--warn-bg);color:var(--warn-text)">缓存数据 · 点「刷新列表」更新</span>' : ''}
   </div>`;
   if (f.tags.length) {
     html += `<div class="flex" style="margin-bottom:12px">`;
@@ -68,13 +87,16 @@ function renderFollow() {
   }
   if (f.error) html += `<p class="err">${esc(f.error)}</p>`;
   if (!f.searching && !f.list.length && !f.loading && !f.error && S.state.logged) {
-    html += `<p class="muted">尚未加载关注列表。点上方 <b>「刷新列表」</b> 拉取，拉过一次就会缓存在后端，之后进页面秒开、搜索也在这份缓存上过滤。</p>`;
+    html += `<p class="muted">尚未加载关注列表。点上方 <b>「刷新列表」</b> 拉取，拉过一次就会缓存在后端，之后进页面秒开；搜索先在这份缓存上过滤，搜不到再自动请求 B 站。</p>`;
   }
-  const items = f.searching
-    ? f.list.filter(u => (u.uname || '').toLowerCase().includes(f.kw.trim().toLowerCase()))
+  const items = (f.searching && f.search_src === 'local')
+    ? f.list.filter(u => (u.uname || '').toLowerCase().includes(low))
     : f.list;
-  if (f.searching && !items.length && !f.error) {
-    html += `<p class="muted">当前列表里没有昵称包含「${esc(f.kw.trim())}」的关注（只搜当前页缓存，可翻页后再搜）。</p>`;
+  if (f.searching && f.search_src === 'local' && !items.length && !f.error) {
+    html += `<p class="muted">缓存列表里没有昵称包含「${esc(f.kw.trim())}」的关注。</p>`;
+  }
+  if (f.searching && f.search_src === 'api' && !items.length && !f.error) {
+    html += `<p class="muted">已扫描全部关注，没有昵称匹配「${esc(f.kw.trim())}」。</p>`;
   }
   if (items.length) {
     html += `<div class="grid grid-follow">`;
