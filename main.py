@@ -108,11 +108,17 @@ class BilibiliPusherPlugin(Star):
         except Exception:
             insts = []
         for p in insts or []:
+            # 平台适配器类型 = meta().name（如 qq_official / aiocqhttp）；
+            # Platform 实例没有 .type 属性，之前 getattr(p,"type") 恒为空。
+            try:
+                ptype = str(p.meta().name or "")
+            except Exception:
+                ptype = str(getattr(p, "type", "") or "")
             out.append(
                 {
                     "id": str(getattr(p, "id", "") or ""),
                     "name": str(getattr(p, "name", "") or ""),
-                    "type": str(getattr(p, "type", "") or ""),
+                    "type": ptype,
                     "enable": bool(getattr(p, "enable", True)),
                 }
             )

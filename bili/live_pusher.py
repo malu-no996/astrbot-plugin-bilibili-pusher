@@ -25,7 +25,7 @@ import time
 
 from loguru import logger
 
-from . import client, live_subs, paths, pusher, sender
+from . import client, live_subs, mdgen, paths, pusher, sender
 
 _SETTINGS_FILE = paths.DATA_DIR / "bilibili_live_push.json"
 _STATE_FILE = paths.DATA_DIR / "bilibili_live_state.json"
@@ -218,6 +218,7 @@ async def _send(sub: dict, room: dict, online: bool) -> None:
         group_id=str(sub.get("group_id") or ""),
         text=text,
         cover=cover,
+        markdown=mdgen.live_markdown(sub, room, online),
     )
 
 

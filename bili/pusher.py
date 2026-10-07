@@ -26,7 +26,7 @@ import time
 
 from loguru import logger
 
-from . import client, paths, sender, subs
+from . import client, mdgen, paths, sender, subs
 
 _SETTINGS_FILE = paths.DATA_DIR / "bilibili_push.json"
 _STATE_FILE = paths.DATA_DIR / "bilibili_push_state.json"
@@ -316,7 +316,7 @@ def _cover(item: dict) -> str:
 
 
 async def _send(sub: dict, item: dict) -> None:
-    """按订阅配置推一条：纯文字，或文字 + 封面图。"""
+    """按订阅配置推一条：官方平台走 markdown 卡片，其他平台纯文字/文字+封面图。"""
     mode = str(_settings.get("mode") or "auto").strip().lower()
     text = _format(item, sub)
     cover = ""
@@ -327,6 +327,7 @@ async def _send(sub: dict, item: dict) -> None:
         group_id=str(sub.get("group_id") or ""),
         text=text,
         cover=cover,
+        markdown=mdgen.feed_markdown(item, sub),
     )
 
 
