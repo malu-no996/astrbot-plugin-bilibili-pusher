@@ -38,17 +38,22 @@ async function pushModalOpen(u) {
     P.platforms = j.platforms || [];
   } else P.error = j.message || '拉取平台实例失败';
   P.binds = bj.ok ? bindPlatformOptions(bj.binds) : [];
-  if (P.binds.length === 1) {
-    P.platform_id = P.binds[0].platform_id;
-    P.group_id = P.binds[0].group_id; P.group_name = P.binds[0].group_name;
-  } else if (!P.binds.length && P.platforms.length === 1) {
+  if (P.binds.length) {
+    // 有绑定记录：只有一个平台实例时自动选中并带上它绑定的第一个群
+    const pids = [...new Set(P.binds.map(b => b.platform_id))];
+    if (pids.length === 1) {
+      P.platform_id = pids[0];
+      const b = P.binds.find(x => x.platform_id === P.platform_id);
+      P.group_id = b.group_id; P.group_name = b.group_name;
+    }
+  } else if (P.platforms.length === 1) {
     P.platform_id = P.platforms[0].id;
   }
   P.loading = false;
   render();
 }
 
-/* 弹窗里选平台实例（来自绑定记录）→ 自动回填该机器人绑定的群 ID / 群名 */
+/* 弹窗里选平台实例（来自绑定记录）→ 自动回填该机器人绑定的第一个群 */
 function pushPlatformPicked(which) {
   const P = S[which];
   const b = (P.binds || []).find(x => x.platform_id === P.platform_id);
@@ -57,6 +62,27 @@ function pushPlatformPicked(which) {
     P.group_name = b.group_name || P.group_name;
   }
   render();
+}
+
+/* 弹窗里选群（同一机器人可能绑定多个群）→ 自动带出群备注名 */
+function pushGroupPicked(which) {
+  const P = S[which];
+  const b = (P.binds || []).find(x => x.platform_id === P.platform_id && x.group_id === P.group_id);
+  if (b) P.group_name = b.group_name || P.group_name;
+  render();
+}
+
+/* 群 ID 控件：选中的平台实例有绑定群 → 下拉框；没有 → 手动输入框 */
+function groupField(which) {
+  const P = S[which];
+  const opts = (P.binds || []).filter(b => b.platform_id === P.platform_id);
+  if (P.platform_id && opts.length) {
+    return `<select data-modal-model="${which}.group_id" data-modal-group="${which}" class="sel">
+      <option value="">— 请选择群 —</option>
+      ${opts.map(b => `<option value="${esc(b.group_id)}"${b.group_id === P.group_id ? ' selected' : ''}>${esc(b.group_name ? `${b.group_name}（${b.group_id}）` : b.group_id)}</option>`).join('')}
+    </select>`;
+  }
+  return `<input type="text" data-modal-model="${which}.group_id" value="${esc(P.group_id)}" placeholder="该平台群消息事件里的 session_id（如 QQ 群号）" class="kw-input">`;
 }
 
 async function pushModalSave() {
@@ -117,10 +143,14 @@ async function livePushModalOpen(u) {
     P.platforms = j.platforms || [];
   } else P.error = j.message || '拉取平台实例失败';
   P.binds = bj.ok ? bindPlatformOptions(bj.binds) : [];
-  if (P.binds.length === 1) {
-    P.platform_id = P.binds[0].platform_id;
-    P.group_id = P.binds[0].group_id; P.group_name = P.binds[0].group_name;
-  } else if (!P.binds.length && P.platforms.length === 1) {
+  if (P.binds.length) {
+    const pids = [...new Set(P.binds.map(b => b.platform_id))];
+    if (pids.length === 1) {
+      P.platform_id = pids[0];
+      const b = P.binds.find(x => x.platform_id === P.platform_id);
+      P.group_id = b.group_id; P.group_name = b.group_name;
+    }
+  } else if (P.platforms.length === 1) {
     P.platform_id = P.platforms[0].id;
   }
   P.loading = false;
@@ -194,9 +224,9 @@ function renderModal() {
         </select>
         <span class="muted">${P.binds && P.binds.length ? '处理者 = 绑定该群的机器人；选中自动填群 ID' : 'AstrBot「消息平台」里配置的实例 ID'}</span></div>
       <div class="row"><label>群 ID</label>
-        <input type="text" data-modal-model="push.group_id" value="${esc(P.group_id)}" placeholder="该平台群消息事件里的 session_id（如 QQ 群号）" class="kw-input">
+        ${groupField('push')}
         <input type="text" data-modal-model="push.group_name" value="${esc(P.group_name)}" placeholder="群备注名（可选）" style="max-width:140px"></div>
-      <p class="muted" style="margin-top:0">${P.binds && P.binds.length ? '群 ID 默认填处理者绑定的群，可直接改。' : ''}没有绑定记录时：在目标群发一次「绑定B站推送」，这里就会自动带出；或手动填 session_id。</p>
+      <p class="muted" style="margin-top:0">${P.binds && P.binds.length ? '群下拉列出该机器人绑定的群（一机多群在数据页看绑定记录）；选中自动带群备注。' : ''}没有绑定记录时：在目标群发一次「绑定B站推送 [群名]」，这里就能选；或手动填 session_id。</p>
       <div class="row"><label>订阅消息类型</label><div class="flex">${kindsChecks('push')}</div></div>
       ${!P.types.length ? '<p class="err" style="margin-top:0">至少选择一个消息类型（默认：投稿）</p>' : ''}
       <div class="row"><label>图文需包含</label>
@@ -234,7 +264,7 @@ function renderModal() {
         </select>
         ${P.binds && P.binds.length ? '<span class="muted">处理者 = 绑定该群的机器人；选中自动填群 ID</span>' : ''}</div>
       <div class="row"><label>群 ID</label>
-        <input type="text" data-modal-model="livepush.group_id" value="${esc(P.group_id)}" placeholder="该平台群消息事件里的 session_id（如 QQ 群号）" class="kw-input">
+        ${groupField('livepush')}
         <input type="text" data-modal-model="livepush.group_name" value="${esc(P.group_name)}" placeholder="群备注名（可选）" style="max-width:140px"></div>
       <div class="row"><label>推送事件</label>
         <label class="check"><input type="checkbox" data-modal-check="livepush.notify_live" ${P.notify_live ? 'checked' : ''}> 开播</label>

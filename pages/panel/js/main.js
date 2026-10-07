@@ -141,8 +141,10 @@ document.addEventListener('change', (e) => {
   }
   if (el.tagName === 'SELECT' && el.dataset.modalModel) {
     stateSet(el.dataset.modalModel, el.value);
-    // 弹窗的平台实例下拉（data-modal-pick = 状态名）：选中后自动回填该处理者绑定的群 ID
+    // 弹窗的平台实例下拉（data-modal-pick）→ 自动回填该处理者绑定的第一个群；
+    // 弹窗的群下拉（data-modal-group）→ 自动带出群备注名
     if (el.dataset.modalPick && typeof pushPlatformPicked === 'function') pushPlatformPicked(el.dataset.modalPick);
+    if (el.dataset.modalGroup && typeof pushGroupPicked === 'function') pushGroupPicked(el.dataset.modalGroup);
     return;
   }
   if (el.type === 'checkbox' && (el.dataset.model || el.dataset.modalModel)) {
