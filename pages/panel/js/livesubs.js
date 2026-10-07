@@ -81,7 +81,7 @@ function renderLivesubs() {
   html += `<div class="card"><h2>指定 UID 订阅直播 <span class="hint">输入主播 UID 或 space 主页链接</span></h2>
     <div class="flex">
       <input type="text" data-model="livefinder.uid" value="${esc(f.uid)}" placeholder="主播 UID（纯数字，或粘贴 space.bilibili.com 主页链接）" style="flex:1;max-width:400px">
-      <button data-act="liveFindUser" ${f.loading || !f.uid.trim() ? 'disabled' : ''}>${f.loading ? '查找中…' : '查找'}</button>
+      <button data-act="liveFindUser" ${f.loading ? 'disabled' : ''}>${f.loading ? '查找中…' : '查找'}</button>
     </div>`;
   if (f.error) html += `<p class="err" style="margin:8px 0 0">${esc(f.error)}</p>`;
   if (f.user && f.user.mid) {

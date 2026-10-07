@@ -88,7 +88,7 @@ function renderSubs() {
   html += `<div class="card"><div class="row" style="margin-bottom:0">
     <label class="muted">指定 UID</label>
     <input type="text" data-model="finder.uid" value="${esc(f.uid)}" placeholder="UP 主 UID（纯数字，或直接粘贴 space.bilibili.com 主页链接）" style="flex:1;max-width:400px">
-    <button data-act="findUser" ${f.loading || !f.uid.trim() ? 'disabled' : ''}>${f.loading ? '查找中…' : '查找'}</button>
+    <button data-act="findUser" ${f.loading ? 'disabled' : ''}>${f.loading ? '查找中…' : '查找'}</button>
   </div>`;
   if (f.error) html += `<p class="err" style="margin:8px 0 0">${esc(f.error)}</p>`;
   if (f.user) {
