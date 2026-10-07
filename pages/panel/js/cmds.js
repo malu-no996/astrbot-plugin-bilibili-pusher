@@ -8,7 +8,7 @@ async function loadCmds() {
     C.config = j.config || null;
     C.static = j.static || [];
     if (C.config) {
-      for (const k of ['sub', 'unsub']) {
+      for (const k of ['sub', 'unsub', 'bind']) {
         if (C.config[k]) C.config[k].triggers_raw = (C.config[k].triggers || []).join('，');
       }
     }
@@ -22,13 +22,13 @@ async function saveCmds() {
   if (!C.config) return;
   C.loading = true; render();
   const body = {};
-  for (const k of ['sub', 'unsub']) {
+  for (const k of ['sub', 'unsub', 'bind']) {
     const c = C.config[k] || {};
     body[k] = {
       enabled: !!c.enabled,
-      admin_only: !!c.admin_only,
       triggers: String(c.triggers_raw || '').split(/[,，\n]/).map(s => s.trim()).filter(Boolean),
     };
+    if (k !== 'bind') body[k].admin_only = !!c.admin_only;   // bind 权限固定，不提交开关
   }
   const j = await POST('cmds/save', body);
   if (j.ok) {
@@ -49,18 +49,20 @@ function renderCmds() {
     html += `<div class="card"><p class="muted">${C.loading ? '加载中…' : '未加载，点「重新加载」'}</p></div>`;
   } else {
     html += `<p class="muted hint" style="margin:0 0 10px">两条订阅命令改完点「保存配置」立即生效（不用重启）。群消息去掉 @机器人 和 / 前缀后，以触发词开头即命中；触发词后面跟 UP 主 UID（纯数字或 space 主页链接）。</p>`;
-    for (const [k, name] of [['sub', '订阅B站推送'], ['unsub', '取消B站推送']]) {
+    for (const [k, name] of [['sub', '订阅B站推送'], ['unsub', '取消B站推送'], ['bind', '绑定B站推送']]) {
       const c = C.config[k] || {};
       html += `<div class="card"><h2>${name}</h2>
         <p class="muted" style="margin-top:0">${esc(c.desc || '')}</p>
         <div class="row">
           <label><input type="checkbox" data-model="cmds.config.${k}.enabled" ${c.enabled ? 'checked' : ''}> 启用</label>
-          <label><input type="checkbox" data-model="cmds.config.${k}.admin_only" ${c.admin_only ? 'checked' : ''}> 仅管理员可用</label>
+          ${k === 'bind'
+            ? '<span class="muted">权限固定：仅群主 / 群管理员 / AstrBot 管理员可用（不可更改）</span>'
+            : `<label><input type="checkbox" data-model="cmds.config.${k}.admin_only" ${c.admin_only ? 'checked' : ''}> 仅管理员可用</label>`}
         </div>
         <div class="row"><label>触发词</label>
           <input type="text" style="flex:1;min-width:220px" data-model="cmds.config.${k}.triggers_raw"
             value="${esc(c.triggers_raw ?? (c.triggers || []).join('，'))}"
-            placeholder="多个用逗号分隔，例：${k === 'sub' ? '订阅B站推送，订阅UP' : '取消B站推送，退订UP'}"></div>
+            placeholder="多个用逗号分隔，例：${k === 'sub' ? '订阅B站推送，订阅UP' : k === 'unsub' ? '取消B站推送，退订UP' : '绑定B站推送，绑定推送'}"></div>
       </div>`;
     }
     html += `<div class="actions" style="margin-bottom:14px">

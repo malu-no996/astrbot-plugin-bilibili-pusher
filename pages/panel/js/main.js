@@ -84,6 +84,8 @@ const ACTIONS = {
   dataClearRecs,
   dataClearPage: () => dataClearCache('page'),
   dataClearImages: () => dataClearCache('images'),
+  bindsDel: (id) => bindsDel(id),
+  bindsClear,
   modalClose: () => { setModalHidden(); render(); },
 };
 

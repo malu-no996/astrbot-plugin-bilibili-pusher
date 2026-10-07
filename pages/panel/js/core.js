@@ -81,7 +81,7 @@ const S = {
   livenotify: { show: false, id: '', uname: '', notify_live: true, notify_offline: true, saving: false, error: '' },
   // 命令配置 / 数据管理（页签）
   cmds: { config: null, static: [], loading: false },
-  data: { overview: null, records: [], loading: false },
+  data: { overview: null, records: [], binds: [], loading: false },
 };
 
 /* 按「a.b.c」路径读/写状态（事件委托的绑定用） */

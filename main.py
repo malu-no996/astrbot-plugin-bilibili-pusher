@@ -190,6 +190,9 @@ class BilibiliPusherPlugin(Star):
         reg(f"{PREFIX}/cmd_subs", self.api_cmd_subs, ["GET"], "命令订阅记录列表")
         reg(f"{PREFIX}/cmd_subs/delete", self.api_cmd_subs_delete, ["POST"], "删除一条命令订阅")
         reg(f"{PREFIX}/cmd_subs/clear", self.api_cmd_subs_clear, ["POST"], "清空命令订阅记录")
+        reg(f"{PREFIX}/binds", self.api_binds, ["GET"], "绑定的群列表（绑定B站推送命令落库）")
+        reg(f"{PREFIX}/binds/delete", self.api_binds_delete, ["POST"], "删除一条绑定群")
+        reg(f"{PREFIX}/binds/clear", self.api_binds_clear, ["POST"], "清空绑定群")
         reg(f"{PREFIX}/data/overview", self.api_data_overview, ["GET"], "数据管理页概览")
         reg(f"{PREFIX}/data/cache/clear", self.api_data_cache_clear, ["POST"], "清空缓存")
 
@@ -632,8 +635,8 @@ class BilibiliPusherPlugin(Star):
 
     async def api_cmds_save(self):
         body = await self._body()
-        if not isinstance(body, dict) or not (body.get("sub") or body.get("unsub")):
-            return error_response("请求体里没有命令配置（需要 sub / unsub 字段）")
+        if not isinstance(body, dict) or not (body.get("sub") or body.get("unsub") or body.get("bind")):
+            return error_response("请求体里没有命令配置（需要 sub / unsub / bind 字段）")
         try:
             config = cmdsubs.save_cfg(body)
         except Exception as exc:
@@ -662,6 +665,25 @@ class BilibiliPusherPlugin(Star):
             return error_response(f"清空失败：{type(exc).__name__}: {exc}", status_code=500)
         return json_response({"ok": True, "message": f"已清空 {n} 条命令订阅记录", "cleared": n})
 
+    async def api_binds(self):
+        return json_response({"ok": True, "binds": cmdsubs.all_binds()})
+
+    async def api_binds_delete(self):
+        body = await self._body()
+        bind_id = str(body.get("id") or "")
+        if not bind_id:
+            return error_response("缺少绑定记录 id")
+        ok, message = cmdsubs.bind_remove(bind_id)
+        return json_response({"ok": ok, "message": message})
+
+    async def api_binds_clear(self):
+        try:
+            n = cmdsubs.binds_clear()
+        except Exception as exc:
+            logger.exception("bilibili 清空绑定群异常")
+            return error_response(f"清空失败：{type(exc).__name__}: {exc}", status_code=500)
+        return json_response({"ok": True, "message": f"已清空 {n} 条绑定记录", "cleared": n})
+
     async def api_data_overview(self):
         """数据管理页概览：各类数据条数 + 缓存现状 + data/ 目录文件清单。"""
         files: list[dict] = []
@@ -679,6 +701,7 @@ class BilibiliPusherPlugin(Star):
                     "subs": len(subs.all()),
                     "live_subs": len(live_subs.all()),
                     "cmd_subs": len(cmdsubs.all()),
+                    "binds": len(cmdsubs.all_binds()),
                     "push_state": pusher.state_count(),
                 },
                 "cache": {
@@ -744,7 +767,7 @@ class BilibiliPusherPlugin(Star):
         platform_id = str(event.get_platform_id() or "")
         qq_id = str(event.get_sender_id() or "")
 
-        for kind in ("unsub", "sub"):
+        for kind in ("unsub", "bind", "sub"):
             c = cfg.get(kind) or {}
             if not c.get("enabled"):
                 continue
@@ -758,12 +781,25 @@ class BilibiliPusherPlugin(Star):
                 if tail and not (tail[:1].isspace() or tail.isdigit() or tail[:1] in "：:"):
                     continue
                 rest = tail.strip().lstrip("：:").strip()
-                if c.get("admin_only") and not event.is_admin():
+                # bind 的权限不走 admin_only 开关（固定要求群主/群管理员/AstrBot 管理员，见 _bind_allowed）
+                if c.get("admin_only") and kind != "bind" and not event.is_admin():
                     return   # 仅管理员命令，非管理员发的直接忽略（不回复不拦截）
                 try:
                     if kind == "sub":
                         async for r in self._handle_sub_cmd(
                             event, rest, qq_id=qq_id, group_id=group_id,
+                            platform=platform_name, platform_id=platform_id,
+                        ):
+                            yield r
+                    elif kind == "bind":
+                        if not await self._bind_allowed(event, qq_id=qq_id, group_id=group_id):
+                            yield event.plain_result(
+                                "「绑定B站推送」仅限群主、群管理员或 AstrBot 管理员使用"
+                            )
+                            event.stop_event()
+                            return
+                        async for r in self._handle_bind_cmd(
+                            event, qq_id=qq_id, group_id=group_id,
                             platform=platform_name, platform_id=platform_id,
                         ):
                             yield r
@@ -777,6 +813,65 @@ class BilibiliPusherPlugin(Star):
                     logger.exception("bilibili 订阅命令处理异常")
                     yield event.plain_result(f"命令执行出错：{type(exc).__name__}: {exc}")
                 return   # 命中一条触发词就结束
+
+    async def _bind_allowed(self, event: AstrMessageEvent, *, qq_id: str, group_id: str) -> bool:
+        """「绑定B站推送」权限：AstrBot 管理员，或群主/群管理员。
+
+        OneBot（aiocqhttp）平台用 get_group_member_info 查发送者的群角色；
+        QQ 官方等平台拿不到群身份，只能靠 AstrBot 管理员名单。
+        """
+        try:
+            if event.is_admin():
+                return True
+        except Exception:
+            pass
+        bot = getattr(event, "bot", None)   # 只有 AiocqhttpMessageEvent 有 .bot
+        if bot is None or not group_id.isdigit() or not qq_id.isdigit():
+            return False
+        try:
+            info = await bot.call_action(
+                "get_group_member_info",
+                group_id=int(group_id),
+                user_id=int(qq_id),
+                no_cache=True,
+            )
+            return str((info or {}).get("role") or "") in ("owner", "admin")
+        except Exception as exc:
+            logger.warning(f"查询群成员角色失败（群 {group_id} / {qq_id}）：{exc}")
+            return False
+
+    async def _handle_bind_cmd(
+        self, event: AstrMessageEvent, *, qq_id: str, group_id: str,
+        platform: str, platform_id: str,
+    ):
+        """「绑定B站推送」：取群名（群的名称，不是群员昵称）→ 群 ID + 群名持久化。"""
+        group_name = ""
+        g = getattr(event.message_obj, "group", None)
+        if g is not None:
+            group_name = str(getattr(g, "group_name", "") or "")
+        bot = getattr(event, "bot", None)
+        if (not group_name) and bot is not None and group_id.isdigit():
+            # OneBot 事件里没带群名时，调 get_group_info 现查一次
+            try:
+                info = await bot.call_action("get_group_info", group_id=int(group_id))
+                group_name = str((info or {}).get("group_name") or "")
+            except Exception as exc:
+                logger.warning(f"获取群名失败（群 {group_id}）：{exc}")
+        ok, message = cmdsubs.bind_add(
+            platform_id=platform_id,
+            group_id=group_id,
+            platform=platform,
+            group_name=group_name,
+            qq_id=qq_id,
+        )
+        if ok:
+            shown = group_name or "（未取到群名，仅记录群 ID）"
+            yield event.plain_result(
+                f"{message}：{shown}（群 {group_id}）\n"
+                f"本群已登记到 B 站推送服务；取消绑定请在面板「数据」页删除该记录"
+            )
+        else:
+            yield event.plain_result(f"绑定失败：{message}")
 
     async def _handle_sub_cmd(
         self, event: AstrMessageEvent, rest: str, *, qq_id: str, group_id: str,

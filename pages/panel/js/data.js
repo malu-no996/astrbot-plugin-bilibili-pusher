@@ -3,9 +3,10 @@
 async function loadData() {
   const D = S.data;
   D.loading = true; render();
-  const [o, r] = await Promise.all([GET('data/overview'), GET('cmd_subs')]);
+  const [o, r, b] = await Promise.all([GET('data/overview'), GET('cmd_subs'), GET('binds')]);
   if (o.ok) D.overview = o; else notify(o.message || '读取数据概览失败', 'err');
   if (r.ok) D.records = r.records || []; else notify(r.message || '读取命令订阅记录失败', 'err');
+  if (b.ok) D.binds = b.binds || []; else notify(b.message || '读取绑定群失败', 'err');
   D.loading = false;
   render();
 }
@@ -32,6 +33,22 @@ async function dataClearCache(kind) {
   await loadData();
 }
 
+async function bindsDel(id) {
+  if (!confirmBox('确定删除这条绑定记录？')) return;
+  const j = await POST('binds/delete', { id });
+  notify(j.message || (j.ok ? '已删除' : '删除失败'), j.ok ? 'ok' : 'err');
+  await loadData();
+}
+
+async function bindsClear() {
+  const D = S.data;
+  if (!D.binds.length) return;
+  if (!confirmBox(`确定清空全部 ${D.binds.length} 条绑定记录？`)) return;
+  const j = await POST('binds/clear', {});
+  notify(j.message || '已清空', j.ok ? 'ok' : 'err');
+  await loadData();
+}
+
 function renderData() {
   const D = S.data;
   const o = D.overview || {};
@@ -42,6 +59,7 @@ function renderData() {
     <span class="badge online">面板订阅 ${c.subs ?? '-'}</span>
     <span class="badge online">直播订阅 ${c.live_subs ?? '-'}</span>
     <span class="badge online">命令订阅 ${c.cmd_subs ?? '-'}</span>
+    <span class="badge online">绑定群 ${c.binds ?? '-'}</span>
     <span class="badge online">推送记录 ${c.push_state ?? '-'}</span>
     <span style="flex:1"></span>
     <button class="ghost" data-act="dataReload" ${D.loading ? 'disabled' : ''}>刷新</button>
@@ -68,6 +86,27 @@ function renderData() {
         <td>${esc(r.qq_id || '-')}</td>
         <td>${fmt(r.created_at)}</td>
         <td><button class="red" data-act="dataDel" data-arg="${esc(r.id)}">删除</button></td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+  html += `</div>`;
+  html += `<div class="card"><h2>绑定的群（绑定B站推送服务）</h2>
+    <p class="muted" style="margin-top:0">群内发「<b>绑定B站推送</b>」登记的群（仅群主/群管理员/AstrBot 管理员可用），持久化保存群 ID + <b>群名</b>（群的名称，非群员昵称），落 data/bilibili_binds.json。</p>
+    <div class="actions" style="margin:0 0 10px"><button class="red" data-act="bindsClear" ${D.loading || !D.binds.length ? 'disabled' : ''}>清空全部绑定</button></div>`;
+  if (!D.binds.length) {
+    html += `<p class="muted">暂无绑定群</p>`;
+  } else {
+    html += `<table><thead><tr><th>群名</th><th>群 ID</th><th>平台</th><th>平台实例</th><th>绑定人</th><th>绑定时间</th><th></th></tr></thead><tbody>`;
+    for (const r of D.binds) {
+      html += `<tr>
+        <td>${esc(r.group_name || '（未取到群名）')}</td>
+        <td>${esc(r.group_id || '-')}</td>
+        <td>${esc(platformLabel(r.platform))}</td>
+        <td>${esc(r.platform_id || '-')}</td>
+        <td>${esc(r.bound_by || '-')}</td>
+        <td>${fmt(r.bound_at)}</td>
+        <td><button class="red" data-act="bindsDel" data-arg="${esc(r.id)}">删除</button></td>
       </tr>`;
     }
     html += `</tbody></table>`;

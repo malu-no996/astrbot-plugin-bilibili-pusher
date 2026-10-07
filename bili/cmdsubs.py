@@ -25,6 +25,10 @@ from . import client, paths
 
 _CMDS_FILE = paths.DATA_DIR / "bilibili_cmds.json"
 _SUBS_FILE = paths.DATA_DIR / "bilibili_cmd_subs.json"
+_BINDS_FILE = paths.DATA_DIR / "bilibili_binds.json"
+
+# bind 命令也走 CMD_DEFAULTS，但权限固定（群主/群管理员/AstrBot 管理员），不受页面开关影响
+_CMD_KINDS = ("sub", "unsub", "bind")
 
 # 命令触发配置（「命令」页可改）
 CMD_DEFAULTS: dict = {
@@ -39,6 +43,12 @@ CMD_DEFAULTS: dict = {
         "triggers": ["取消B站推送"],
         "admin_only": False,
         "desc": "取消订阅（不带 UID = 取消本群全部）",
+    },
+    "bind": {   # 绑定B站推送
+        "enabled": True,
+        "triggers": ["绑定B站推送"],
+        "admin_only": True,   # 权限固定为「群主/群管理员/AstrBot 管理员」（见 main._bind_allowed），页面不提供开关
+        "desc": "绑定本群到 B 站推送服务：记录群 ID + 群名（仅群主/群管理员/AstrBot 管理员可用）",
     },
 }
 
@@ -68,8 +78,9 @@ STATIC_COMMANDS = [
 ]
 
 _lock = threading.Lock()
-_cmds: dict = {}   # {"sub": {...}, "unsub": {...}}
+_cmds: dict = {}   # {"sub": {...}, "unsub": {...}, "bind": {...}}
 _recs: list[dict] = []
+_binds: list[dict] = []   # 绑定的群：{id, group_id, group_name, platform, platform_id, bound_by, bound_at}
 
 
 # ---------------- 落盘 ----------------
@@ -95,13 +106,23 @@ def _save_recs() -> None:
         logger.warning("bilibili 命令订阅记录写盘失败")
 
 
+def _save_binds() -> None:
+    try:
+        paths.data_dir()
+        tmp = _BINDS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_binds, ensure_ascii=False, indent=2), "utf-8")
+        tmp.replace(_BINDS_FILE)
+    except OSError:
+        logger.warning("bilibili 绑定群写盘失败")
+
+
 def _load() -> None:
-    global _cmds, _recs
+    global _cmds, _recs, _binds
     try:
         if _CMDS_FILE.exists():
             data = json.loads(_CMDS_FILE.read_text("utf-8"))
             if isinstance(data, dict):
-                for kind in ("sub", "unsub"):
+                for kind in _CMD_KINDS:
                     d = data.get(kind)
                     if isinstance(d, dict):
                         base = dict(CMD_DEFAULTS[kind])
@@ -116,9 +137,16 @@ def _load() -> None:
                 _recs = [r for r in data if isinstance(r, dict)]
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning(f"bilibili 命令订阅记录读取失败：{exc}")
-    for kind in ("sub", "unsub"):
+    try:
+        if _BINDS_FILE.exists():
+            data = json.loads(_BINDS_FILE.read_text("utf-8"))
+            if isinstance(data, list):
+                _binds = [r for r in data if isinstance(r, dict)]
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(f"bilibili 绑定群读取失败：{exc}")
+    for kind in _CMD_KINDS:
         _cmds.setdefault(kind, dict(CMD_DEFAULTS[kind]))
-    for kind in ("sub", "unsub"):
+    for kind in _CMD_KINDS:
         normalize_cmd(_cmds[kind])
 
 
@@ -146,9 +174,9 @@ def cfg() -> dict:
 
 
 def save_cfg(body: dict) -> dict:
-    """保存命令配置（只认 sub / unsub 两把钥匙）。返回保存后的配置。"""
+    """保存命令配置（只认 sub / unsub / bind 三把钥匙）。返回保存后的配置。"""
     with _lock:
-        for kind in ("sub", "unsub"):
+        for kind in _CMD_KINDS:
             d = body.get(kind)
             if isinstance(d, dict):
                 base = dict(_cmds.get(kind) or CMD_DEFAULTS[kind])
@@ -266,6 +294,74 @@ def clear() -> int:
         n = len(_recs)
         _recs.clear()
         _save_recs()
+        return n
+
+
+# ---------------- 绑定的群（「绑定B站推送」命令落库） ----------------
+
+
+def all_binds() -> list[dict]:
+    with _lock:
+        return [dict(r) for r in _binds]
+
+
+def bind_add(
+    platform_id: str,
+    group_id: str,
+    platform: str,
+    group_name: str = "",
+    qq_id: str = "",
+) -> tuple[bool, str]:
+    """绑定一个群：持久化群 ID + 群名。同平台同群只保留一条（重复绑定 = 刷新群名）。"""
+    pid, gid = str(platform_id or ""), str(group_id or "")
+    group_name = str(group_name or "").strip()
+    if not gid or not pid:
+        return False, "拿不到群 ID 或平台实例，无法绑定（请确认是在群内发命令）"
+    with _lock:
+        for b in _binds:
+            if b.get("platform_id") == pid and str(b.get("group_id")) == gid:
+                changed = False
+                if group_name and b.get("group_name") != group_name:
+                    b["group_name"] = group_name
+                    changed = True
+                if qq_id and not b.get("bound_by"):
+                    b["bound_by"] = str(qq_id)
+                    changed = True
+                if changed:
+                    _save_binds()
+                return True, "本群已绑定过（已刷新群名）"
+        _binds.append(
+            {
+                "id": f"bind-{pid}-{gid}",
+                "group_id": gid,
+                "group_name": group_name,
+                "platform": str(platform or ""),
+                "platform_id": pid,
+                "bound_by": str(qq_id or ""),
+                "bound_at": int(time.time()),
+            }
+        )
+        _save_binds()
+        return True, "绑定成功"
+
+
+def bind_remove(bind_id: str) -> tuple[bool, str]:
+    bind_id = str(bind_id)
+    with _lock:
+        n = len(_binds)
+        _binds = [b for b in _binds if str(b.get("id")) != bind_id]
+        if len(_binds) == n:
+            return False, "绑定记录不存在（可能已被删除）"
+        _save_binds()
+        return True, "已删除该绑定记录"
+
+
+def binds_clear() -> int:
+    """清空全部绑定记录（数据管理页用），返回清掉的条数。"""
+    with _lock:
+        n = len(_binds)
+        _binds.clear()
+        _save_binds()
         return n
 
 
