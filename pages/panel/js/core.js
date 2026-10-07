@@ -57,6 +57,23 @@ function notify(msg, type) {
 function confirmBox(msg) { return window.confirm(msg); }
 function promptBox(msg, def) { return window.prompt(msg, def ?? ''); }   // 取消 = null
 
+/* 两段式确认：受限 iframe 里 window.confirm 被禁（静默返回 false），
+ * 改成「点一下按钮变『确认？』，再点一下才执行」。返回 true = 已确认可执行。 */
+function markConfirm(el) {
+  if (!el) return true;
+  if (el.dataset.armed === '1') {
+    el.dataset.armed = '';
+    return true;
+  }
+  el.dataset.label = el.textContent;
+  el.dataset.armed = '1';
+  el.textContent = '确认？';
+  setTimeout(() => {
+    if (el.dataset.armed === '1') { el.dataset.armed = ''; el.textContent = el.dataset.label || '删除'; }
+  }, 3000);
+  return false;
+}
+
 /* ---------------- 全局状态（对应原 frag 的 init） ---------------- */
 
 const S = {
@@ -82,7 +99,7 @@ const S = {
   livenotify: { show: false, id: '', uname: '', notify_live: true, notify_offline: true, saving: false, error: '' },
   // 命令配置 / 数据管理（页签）
   cmds: { config: null, static: [], loading: false },
-  data: { overview: null, records: [], binds: [], loading: false },
+  data: { overview: null, records: [], binds: [], loading: false, edit_id: '', edit_group: '', edit_handler: '' },
 };
 
 /* 按「a.b.c」路径读/写状态（事件委托的绑定用） */

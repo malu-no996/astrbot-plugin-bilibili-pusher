@@ -80,13 +80,15 @@ const ACTIONS = {
   cmdsSave: () => saveCmds(),
   cmdsReload: () => loadCmds(),
   dataReload: () => loadData(),
-  dataDel: (id) => dataDelRec(id),
-  dataClearRecs,
+  dataDel: (id, el) => dataDelRec(id, el),
+  dataClearRecs: (a, el) => dataClearRecs(el),
   dataClearPage: () => dataClearCache('page'),
   dataClearImages: () => dataClearCache('images'),
-  bindsDel: (id) => bindsDel(id),
-  bindsClear,
-  bindsEdit: (id) => bindsEdit(id),
+  bindsDel: (id, el) => bindsDel(id, el),
+  bindsClear: (el) => bindsClear(el),
+  bindsEditStart: (id) => bindsEditStart(id),
+  bindsEditSave: () => bindsEditSave(),
+  bindsEditCancel: () => bindsEditCancel(),
   modalClose: () => { setModalHidden(); render(); },
 };
 
@@ -94,7 +96,7 @@ document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
-  if (fn) { e.preventDefault(); fn(el.dataset.arg); }
+  if (fn) { e.preventDefault(); fn(el.dataset.arg, el); }   // 第二参 = 按钮元素（两段式确认用）
 });
 
 /* 输入框双向绑定（input 事件委托） */

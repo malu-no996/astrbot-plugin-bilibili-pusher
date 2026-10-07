@@ -11,17 +11,17 @@ async function loadData() {
   render();
 }
 
-async function dataDelRec(id) {
-  if (!confirmBox('确定删除这条命令订阅记录？删除后该群不再收到这条命令订阅的推送。')) return;
+async function dataDelRec(id, el) {
+  if (!markConfirm(el)) return;
   const j = await POST('cmd_subs/delete', { id });
   notify(j.message || (j.ok ? '已删除' : '删除失败'), j.ok ? 'ok' : 'err');
   await loadData();
 }
 
-async function dataClearRecs() {
+async function dataClearRecs(el) {
   const D = S.data;
   if (!D.records.length) return;
-  if (!confirmBox(`确定清空全部 ${D.records.length} 条命令订阅记录？这些群将不再收到命令订阅的推送。`)) return;
+  if (!markConfirm(el)) return;
   const j = await POST('cmd_subs/clear', {});
   notify(j.message || '已清空', 'ok');
   await loadData();
@@ -33,33 +33,45 @@ async function dataClearCache(kind) {
   await loadData();
 }
 
-async function bindsDel(id) {
-  if (!confirmBox('确定删除这条绑定记录？')) return;
+async function bindsDel(id, el) {
+  if (!markConfirm(el)) return;
   const j = await POST('binds/delete', { id });
   notify(j.message || (j.ok ? '已删除' : '删除失败'), j.ok ? 'ok' : 'err');
   await loadData();
 }
 
-async function bindsClear() {
+async function bindsClear(el) {
   const D = S.data;
   if (!D.binds.length) return;
-  if (!confirmBox(`确定清空全部 ${D.binds.length} 条绑定记录？`)) return;
+  if (!markConfirm(el)) return;
   const j = await POST('binds/clear', {});
   notify(j.message || '已清空', j.ok ? 'ok' : 'err');
   await loadData();
 }
 
-/* 编辑绑定记录：群名 / 处理者名字（QQ 官方平台拿不到群名和机器人名，在这里自定义） */
-async function bindsEdit(id) {
+/* 编辑绑定记录（行内编辑；受限 iframe 里 window.prompt/confirm 被禁，不能用弹窗） */
+function bindsEditStart(id) {
   const b = S.data.binds.find(x => String(x.id) === String(id));
   if (!b) return;
-  const gname = promptBox('群名（群的名称，可自定义）', b.group_name || '');
-  if (gname === null) return;
-  const hname = promptBox('处理者名字（处理这条绑定的机器人名字，可自定义）', b.handler_name || '');
-  if (hname === null) return;
-  const j = await POST('binds/update', { id: b.id, group_name: gname.trim(), handler_name: hname.trim() });
+  S.data.edit_id = b.id;
+  S.data.edit_group = b.group_name || '';
+  S.data.edit_handler = b.handler_name || '';
+  render();
+}
+function bindsEditCancel() {
+  S.data.edit_id = ''; S.data.edit_group = ''; S.data.edit_handler = '';
+  render();
+}
+async function bindsEditSave() {
+  const D = S.data;
+  if (!D.edit_id) return;
+  const j = await POST('binds/update', {
+    id: D.edit_id,
+    group_name: (D.edit_group || '').trim(),
+    handler_name: (D.edit_handler || '').trim(),
+  });
   notify(j.message || (j.ok ? '已保存' : '保存失败'), j.ok ? 'ok' : 'err');
-  if (j.ok) await loadData();
+  if (j.ok) { bindsEditCancel(); await loadData(); }
 }
 
 function renderData() {
@@ -112,16 +124,25 @@ function renderData() {
   } else {
     html += `<table><thead><tr><th>群名</th><th>群 ID</th><th>平台</th><th>处理者 ID</th><th>处理者名字</th><th>绑定人</th><th>绑定时间</th><th></th></tr></thead><tbody>`;
     for (const r of D.binds) {
+      const editing = String(D.edit_id) === String(r.id);
+      const gcell = editing
+        ? `<input type="text" data-model="data.edit_group" value="${esc(D.edit_group)}" style="min-width:120px">`
+        : esc(r.group_name || '（未取到群名）');
+      const hcell = editing
+        ? `<input type="text" data-model="data.edit_handler" value="${esc(D.edit_handler)}" style="min-width:100px" placeholder="可自定义">`
+        : esc(r.handler_name || '-');
       html += `<tr>
-        <td>${esc(r.group_name || '（未取到群名）')}</td>
+        <td>${gcell}</td>
         <td>${esc(r.group_id || '-')}</td>
         <td>${esc(platformLabel(r.platform))}</td>
         <td>${esc(r.handler_id || '-')}</td>
-        <td>${esc(r.handler_name || '-')}</td>
+        <td>${hcell}</td>
         <td>${esc(r.bound_by || '-')}</td>
         <td>${fmt(r.bound_at)}</td>
-        <td><button class="ghost" data-act="bindsEdit" data-arg="${esc(r.id)}">编辑</button>
-          <button class="red" data-act="bindsDel" data-arg="${esc(r.id)}">删除</button></td>
+        <td>${editing
+          ? `<button data-act="bindsEditSave">保存</button> <button class="ghost" data-act="bindsEditCancel">取消</button>`
+          : `<button class="ghost" data-act="bindsEditStart" data-arg="${esc(r.id)}">编辑</button>
+             <button class="red" data-act="bindsDel" data-arg="${esc(r.id)}">删除</button>`}</td>
       </tr>`;
     }
     html += `</tbody></table>`;

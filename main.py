@@ -881,14 +881,25 @@ class BilibiliPusherPlugin(Star):
                 logger.warning(f"获取群名失败（群 {group_id}）：{exc}")
         if custom_name:
             group_name = custom_name   # 命令里带了自定义群名 → 以它为准
-        # 处理者：哪个机器人处理这条命令，就记它的 ID
+        # 处理者：哪个机器人处理这条命令，就记它的 ID。
+        # QQ 官方平台事件里拿不到真实 id（self_id 会被适配器兜底成 "qq_official" 等占位符），
+        # 此时从平台实例配置里取 appid（aiocqhttp 的 self_id 是真实 QQ 号，不用兜底）。
         handler_id = ""
         try:
             handler_id = str(event.get_self_id() or "")
         except Exception:
             handler_id = ""
-        if not handler_id:
-            handler_id = str(getattr(event.message_obj, "self_id", "") or "")
+        if not handler_id.isdigit():
+            try:
+                for inst in self.context.platform_manager.get_insts():
+                    if str(getattr(inst, "id", "") or "") == platform_id:
+                        icfg = getattr(inst, "config", None) or {}
+                        cand = str(icfg.get("appid") or "")
+                        if cand:
+                            handler_id = cand
+                        break
+            except Exception:
+                pass
         # 处理者名字：OneBot 查 get_login_info；其它平台拿不到就留空（页面可改）
         handler_name = ""
         if bot is not None:
