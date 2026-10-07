@@ -1,6 +1,6 @@
 /* B 站面板（astrbot-plugin-bilibili-pusher/pages/panel/app.js）
  * 由 malu_qq_bot bilibili 插件的 11 个 Vue frag 合并移植：原生 JS + AstrBot bridge。
- * 子页签：账号 / 私信 / 关注 / 动态 / 直播 / 动态订阅 / 直播订阅
+ * 子页签：账号 / 私信 / 关注 / 动态 / 直播 / 动态订阅 / 直播订阅 / 命令 / 数据
  * 弹窗：动态推送 / 推送条件 / 直播订阅 / 推送事件
  *
  * 图片直连 B 站 CDN：referrerpolicy="no-referrer"（B 站 CDN 对空 Referer 放行）。
@@ -81,6 +81,9 @@ const S = {
   types: { show: false, id: '', uname: '', list: [], keyword: '', saving: false, error: '' },
   livepush: { show: false, mid: 0, uname: '', face: '', room_id: 0, platforms: [], platform_id: '', group_id: '', group_name: '', notify_live: true, notify_offline: true, loading: false, saving: false, error: '' },
   livenotify: { show: false, id: '', uname: '', notify_live: true, notify_offline: true, saving: false, error: '' },
+  // 命令配置 / 数据管理（页签）
+  cmds: { config: null, static: [], loading: false },
+  data: { overview: null, records: [], loading: false },
 };
 
 /* ---------------- 账号（frag/account） ---------------- */
@@ -1063,11 +1066,181 @@ function setModalHidden() {
   S.push.show = false; S.types.show = false; S.livepush.show = false; S.livenotify.show = false;
 }
 
+/* ---------------- 命令配置（页签） ---------------- */
+
+const PLATFORM_LABELS = { aiocqhttp: 'OneBot（aiocqhttp）', qq_official: 'QQ 官方机器人' };
+const platformLabel = (p) => PLATFORM_LABELS[p] || p || '-';
+function fmtSize(n) {
+  if (n == null) return '-';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(2) + ' MB';
+}
+
+async function loadCmds() {
+  const C = S.cmds;
+  C.loading = true; render();
+  const j = await GET('cmds');
+  if (j.ok) {
+    C.config = j.config || null;
+    C.static = j.static || [];
+    if (C.config) {
+      for (const k of ['sub', 'unsub']) {
+        if (C.config[k]) C.config[k].triggers_raw = (C.config[k].triggers || []).join('，');
+      }
+    }
+  } else notify(j.message || '读取命令配置失败', 'err');
+  C.loading = false;
+  render();
+}
+
+async function saveCmds() {
+  const C = S.cmds;
+  if (!C.config) return;
+  C.loading = true; render();
+  const body = {};
+  for (const k of ['sub', 'unsub']) {
+    const c = C.config[k] || {};
+    body[k] = {
+      enabled: !!c.enabled,
+      admin_only: !!c.admin_only,
+      triggers: String(c.triggers_raw || '').split(/[,，\n]/).map(s => s.trim()).filter(Boolean),
+    };
+  }
+  const j = await POST('cmds/save', body);
+  if (j.ok) {
+    C.config = j.config || C.config;
+    for (const k of ['sub', 'unsub']) {
+      if (C.config[k]) C.config[k].triggers_raw = (C.config[k].triggers || []).join('，');
+    }
+    notify(j.message || '命令配置已保存', 'ok');
+  } else notify(j.message || '保存命令配置失败', 'err');
+  C.loading = false;
+  render();
+}
+
+function renderCmds() {
+  const C = S.cmds;
+  let html = '';
+  if (!C.config) {
+    html += `<div class="card"><p class="muted">${C.loading ? '加载中…' : '未加载，点「重新加载」'}</p></div>`;
+  } else {
+    html += `<p class="muted hint" style="margin:0 0 10px">两条订阅命令改完点「保存配置」立即生效（不用重启）。群消息去掉 @机器人 和 / 前缀后，以触发词开头即命中；触发词后面跟 UP 主 UID（纯数字或 space 主页链接）。</p>`;
+    for (const [k, name] of [['sub', '订阅B站推送'], ['unsub', '取消B站推送']]) {
+      const c = C.config[k] || {};
+      html += `<div class="card"><h2>${name}</h2>
+        <p class="muted" style="margin-top:0">${esc(c.desc || '')}</p>
+        <div class="row">
+          <label><input type="checkbox" data-model="cmds.config.${k}.enabled" ${c.enabled ? 'checked' : ''}> 启用</label>
+          <label><input type="checkbox" data-model="cmds.config.${k}.admin_only" ${c.admin_only ? 'checked' : ''}> 仅管理员可用</label>
+        </div>
+        <div class="row"><label>触发词</label>
+          <input type="text" style="flex:1;min-width:220px" data-model="cmds.config.${k}.triggers_raw"
+            value="${esc(c.triggers_raw ?? (c.triggers || []).join('，'))}"
+            placeholder="多个用逗号分隔，例：${k === 'sub' ? '订阅B站推送，订阅UP' : '取消B站推送，退订UP'}"></div>
+      </div>`;
+    }
+    html += `<div class="actions" style="margin-bottom:14px">
+      <button data-act="cmdsSave" ${C.loading ? 'disabled' : ''}>保存配置</button>
+      <button class="ghost" data-act="cmdsReload" ${C.loading ? 'disabled' : ''}>重新加载</button>
+    </div>`;
+  }
+  html += `<div class="card"><h2>内置命令（固定，仅管理员）</h2>
+    <p class="muted" style="margin-top:0">这三条由 AstrBot 命令系统静态注册，触发词/权限改不了，只作展示。</p>
+    <table><thead><tr><th>命令</th><th>别名</th><th>说明</th><th>用法</th></tr></thead><tbody>
+    ${C.static.map(c => `<tr><td>${esc(c.name)}</td><td>${esc((c.aliases || []).join(' / '))}</td><td>${esc(c.desc || '')}</td><td>${esc(c.usage || '')}</td></tr>`).join('')}
+    </tbody></table></div>`;
+  return html;
+}
+
+/* ---------------- 数据管理（页签） ---------------- */
+
+async function loadData() {
+  const D = S.data;
+  D.loading = true; render();
+  const [o, r] = await Promise.all([GET('data/overview'), GET('cmd_subs')]);
+  if (o.ok) D.overview = o; else notify(o.message || '读取数据概览失败', 'err');
+  if (r.ok) D.records = r.records || []; else notify(r.message || '读取命令订阅记录失败', 'err');
+  D.loading = false;
+  render();
+}
+
+async function dataDelRec(id) {
+  if (!confirmBox('确定删除这条命令订阅记录？删除后该群不再收到这条命令订阅的推送。')) return;
+  const j = await POST('cmd_subs/delete', { id });
+  notify(j.message || (j.ok ? '已删除' : '删除失败'), j.ok ? 'ok' : 'err');
+  await loadData();
+}
+
+async function dataClearRecs() {
+  const D = S.data;
+  if (!D.records.length) return;
+  if (!confirmBox(`确定清空全部 ${D.records.length} 条命令订阅记录？这些群将不再收到命令订阅的推送。`)) return;
+  const j = await POST('cmd_subs/clear', {});
+  notify(j.message || '已清空', 'ok');
+  await loadData();
+}
+
+async function dataClearCache(kind) {
+  const j = await POST('data/cache/clear', kind === 'page' ? { page: true } : { images: true });
+  notify(j.message || '已清空', j.ok ? 'ok' : 'err');
+  await loadData();
+}
+
+function renderData() {
+  const D = S.data;
+  const o = D.overview || {};
+  const c = o.counts || {};
+  const cache = o.cache || {};
+  const imgs = cache.images || {};
+  let html = `<div class="flex" style="margin-bottom:12px">
+    <span class="badge online">面板订阅 ${c.subs ?? '-'}</span>
+    <span class="badge online">直播订阅 ${c.live_subs ?? '-'}</span>
+    <span class="badge online">命令订阅 ${c.cmd_subs ?? '-'}</span>
+    <span class="badge online">推送记录 ${c.push_state ?? '-'}</span>
+    <span style="flex:1"></span>
+    <button class="ghost" data-act="dataReload" ${D.loading ? 'disabled' : ''}>刷新</button>
+  </div>`;
+  html += `<div class="card"><h2>缓存</h2>
+    <div class="row"><label>页面缓存</label><span>${cache.page_cache ?? 0} 条</span>
+      <button class="ghost" data-act="dataClearPage" ${D.loading ? 'disabled' : ''}>清空</button></div>
+    <div class="row"><label>图片缓存</label><span>${imgs.count ?? 0} 个（${fmtSize(imgs.bytes || 0)}）</span>
+      <button class="ghost" data-act="dataClearImages" ${D.loading ? 'disabled' : ''}>清空</button></div>
+  </div>`;
+  html += `<div class="card"><h2>命令订阅记录${D.records.length ? `（共 ${D.records.length} 条）` : ''}</h2>
+    <p class="muted" style="margin-top:0">群内发「<b>订阅B站推送 UP主UID</b>」产生的订阅（{qq_id, group_id, platform, bilibili_id}），这些群也参与定时推送（全类型动态）。面板手动加的订阅在「动态订阅」页管理。</p>
+    <div class="actions" style="margin:0 0 10px"><button class="red" data-act="dataClearRecs" ${D.loading || !D.records.length ? 'disabled' : ''}>清空全部记录</button></div>`;
+  if (!D.records.length) {
+    html += `<p class="muted">暂无记录</p>`;
+  } else {
+    html += `<table><thead><tr><th>UP 主</th><th>群 ID</th><th>平台</th><th>平台实例</th><th>订阅者</th><th>订阅时间</th><th></th></tr></thead><tbody>`;
+    for (const r of D.records) {
+      html += `<tr>
+        <td>${esc(r.uname || '-')}<div class="muted">UID ${esc(r.bilibili_id)}</div></td>
+        <td>${esc(r.group_id || '-')}</td>
+        <td>${esc(platformLabel(r.platform))}</td>
+        <td>${esc(r.platform_id || '-')}</td>
+        <td>${esc(r.qq_id || '-')}</td>
+        <td>${fmt(r.created_at)}</td>
+        <td><button class="red" data-act="dataDel" data-arg="${esc(r.id)}">删除</button></td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+  html += `</div>`;
+  html += `<div class="card"><h2>数据文件（data/ 目录）</h2>
+    <table><thead><tr><th>文件</th><th>大小</th></tr></thead><tbody>
+    ${(o.files || []).map(f => `<tr><td>${esc(f.name)}</td><td>${fmtSize(f.size)}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">空</td></tr>'}
+    </tbody></table></div>`;
+  return html;
+}
+
 /* ---------------- 渲染 & 事件 ---------------- */
 
 const TABS = [
   ['account', '账号'], ['dm', '私信'], ['follow', '关注'], ['feed', '动态'],
   ['lives', '直播'], ['subs', '动态订阅'], ['livesubs', '直播订阅'],
+  ['cmds', '命令'], ['data', '数据'],
 ];
 
 function render() {
@@ -1085,7 +1258,7 @@ function render() {
   badge.className = 'badge ' + (S.state.logged ? 'online' : 'offline');
   // 内容
   const view = document.getElementById('view');
-  const map = { account: renderAccount, dm: renderDm, follow: renderFollow, feed: renderFeed, lives: renderLives, subs: renderSubs, livesubs: renderLivesubs };
+  const map = { account: renderAccount, dm: renderDm, follow: renderFollow, feed: renderFeed, lives: renderLives, subs: renderSubs, livesubs: renderLivesubs, cmds: renderCmds, data: renderData };
   view.innerHTML = (map[S.tab] || renderAccount)();
   renderModal();
 }
@@ -1099,6 +1272,8 @@ function switchTab(id) {
   if (id === 'feed' && S.dyn.source === 'follow' && S.state.logged && !S.dyn.list.length && !S.dyn.loading && !S.dyn.error) loadDynamics('');   // 有缓存秒显，没缓存拉一次
   if (id === 'follow' && !S.state.logged) { followClearCache(); S.follow.list = []; S.follow.total = 0; }
   else if (id === 'follow' && !S.follow.list.length && !S.follow.loading) loadFollowings();   // 后端缓存
+  if (id === 'cmds' && !S.cmds.config && !S.cmds.loading) loadCmds();
+  if (id === 'data' && !S.data.overview && !S.data.loading) loadData();
   render();
 }
 
@@ -1146,6 +1321,13 @@ const ACTIONS = {
   livePushOpen: (mid) => livePushModalOpen(mid),
   livePushModalSave,
   livePushCfgSave, livePushCfgLoad, livePushRun: () => livePushRunNow(false),
+  cmdsSave: () => saveCmds(),
+  cmdsReload: () => loadCmds(),
+  dataReload: () => loadData(),
+  dataDel: (id) => dataDelRec(id),
+  dataClearRecs,
+  dataClearPage: () => dataClearCache('page'),
+  dataClearImages: () => dataClearCache('images'),
   modalClose: () => { setModalHidden(); render(); },
 };
 
