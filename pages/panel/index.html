@@ -4,6 +4,9 @@
     <meta charset="utf-8" />
     <title>B 站面板</title>
     <link rel="stylesheet" href="./style.css" />
+    <!-- bridge 必须先于所有业务脚本加载（经典脚本立即执行，不能等服务端在 </body> 前追加）；
+         服务端会把这行改写成带鉴权参数的真实地址 -->
+    <script src="/api/plugin/page/bridge-sdk.js"></script>
   </head>
   <body>
     <div id="app">
