@@ -989,7 +989,7 @@ function findLiveSubById(id) { return S.livesubs.list.find(s => s.id === id); }
 function renderModal() {
   const box = document.getElementById('modal');
   const kindsChecks = (list) => KINDS.map(k =>
-    `<label class="check"><input type="checkbox" data-check="${list}" value="${k.v}" ${S[list === 'push' ? 'push' : 'types'].list.includes(k.v) ? 'checked' : ''}> ${k.t}</label>`).join('');
+    `<label class="check"><input type="checkbox" data-check="${list === 'push' ? 'push.types' : 'types.list'}" value="${k.v}" ${(list === 'push' ? S.push.types : S.types.list).includes(k.v) ? 'checked' : ''}> ${k.t}</label>`).join('');
   const platformOptions = (list, sel) => {
     const P = S[list];
     return P.platforms.map(p => `<option value="${esc(p.id)}"${p.id === sel ? ' selected' : ''}>${esc(p.name || p.id)}（${esc(p.type || p.id)}）</option>`).join('');
@@ -1197,10 +1197,10 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset.check) {
-    // 订阅类型多选（data-check 指向 push / types 的 list）
-    const listName = el.dataset.check;
+    // 订阅类型多选（data-check = 完整状态路径，如 push.types / types.list）
+    const arr = stateGet(el.dataset.check);
+    if (!Array.isArray(arr)) return;
     const v = el.value;
-    const arr = stateGet(listName + '.list');
     const idx = arr.indexOf(v);
     if (el.checked && idx < 0) arr.push(v);
     if (!el.checked && idx >= 0) arr.splice(idx, 1);
