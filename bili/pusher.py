@@ -26,7 +26,7 @@ import time
 
 from loguru import logger
 
-from . import client, mdgen, paths, sender, subs
+from . import client, cmdsubs, mdgen, paths, sender, subs
 
 _SETTINGS_FILE = paths.DATA_DIR / "bilibili_push.json"
 _STATE_FILE = paths.DATA_DIR / "bilibili_push_state.json"
@@ -243,6 +243,11 @@ def _mark(sub_id: str, items: list[dict]) -> None:
     rec["last_ts"] = last_ts
 
 
+def state_count() -> int:
+    """已推记录条数（数据管理页展示用）。"""
+    return len(_state["pushed"])
+
+
 def forget(sub_id: str) -> None:
     """删除订阅时一并清掉它的推送记录。"""
     _state["pushed"].pop(str(sub_id), None)
@@ -341,7 +346,9 @@ async def run_cycle(force: bool = False, reset: bool = False) -> dict:
     st = settings()
     if not st["enabled"] and not force:
         return {"ok": False, "message": "定时推送未启用", "checked": 0, "pushed": 0}
-    targets = subs.enabled()
+    # 面板订阅 + 命令订阅（伪订阅，全类型）一起跑；
+    # 去重/基线/防风控对两类目标一视同仁（state key 不冲突）。
+    targets = subs.enabled() + cmdsubs.targets()
     summary = {"ok": True, "checked": 0, "pushed": 0, "baselined": 0,
                "reset": bool(reset), "errors": [], "details": []}
     if not targets:

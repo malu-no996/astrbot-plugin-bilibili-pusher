@@ -14,6 +14,7 @@ origin = "{platform_id}:GroupMessage:{group_id}"。
 import asyncio
 import base64
 import io
+import re
 
 import httpx
 from loguru import logger
@@ -23,7 +24,18 @@ from astrbot.api.star import Context, Star
 from astrbot.api.web import error_response, json_response, request
 
 from . import bili
-from .bili import client, imgcache, live_pusher, live_subs, pusher, sender, store, subs, webcache
+from .bili import (
+    client,
+    cmdsubs,
+    imgcache,
+    live_pusher,
+    live_subs,
+    pusher,
+    sender,
+    store,
+    subs,
+    webcache,
+)
 
 PLUGIN_NAME = "astrbot_plugin_bilibili_pusher"
 
@@ -171,6 +183,15 @@ class BilibiliPusherPlugin(Star):
             "保存直播推送设置",
         )
         reg(f"{PREFIX}/live_push/run", self.api_live_push_run, ["POST"], "立即检查一轮直播状态")
+
+        # ---------------- 命令配置 / 命令订阅 / 数据管理 ----------------
+        reg(f"{PREFIX}/cmds", self.api_cmds, ["GET"], "命令配置（可改的两条 + 内置只读）")
+        reg(f"{PREFIX}/cmds/save", self.api_cmds_save, ["POST"], "保存命令配置")
+        reg(f"{PREFIX}/cmd_subs", self.api_cmd_subs, ["GET"], "命令订阅记录列表")
+        reg(f"{PREFIX}/cmd_subs/delete", self.api_cmd_subs_delete, ["POST"], "删除一条命令订阅")
+        reg(f"{PREFIX}/cmd_subs/clear", self.api_cmd_subs_clear, ["POST"], "清空命令订阅记录")
+        reg(f"{PREFIX}/data/overview", self.api_data_overview, ["GET"], "数据管理页概览")
+        reg(f"{PREFIX}/data/cache/clear", self.api_data_cache_clear, ["POST"], "清空缓存")
 
         # 图片代理（兜底；页面一般直连 CDN + referrerpolicy=no-referrer）
         reg(f"{PREFIX}/img", self.api_img, ["GET"], "B 站图片代理")
@@ -594,6 +615,237 @@ class BilibiliPusherPlugin(Star):
             logger.exception("bilibili 手动直播推送异常")
             return error_response(f"直播推送执行失败：{type(exc).__name__}: {exc}", status_code=500)
         return json_response({"ok": bool(result.get("ok", True)), **result})
+
+    # ==================================================================
+    # 命令配置 / 命令订阅 / 数据管理
+    # ==================================================================
+
+    async def api_cmds(self):
+        """命令配置：可改的两条（sub/unsub）+ 内置只读的三条。"""
+        return json_response(
+            {
+                "ok": True,
+                "config": cmdsubs.cfg(),
+                "static": cmdsubs.STATIC_COMMANDS,
+            }
+        )
+
+    async def api_cmds_save(self):
+        body = await self._body()
+        if not isinstance(body, dict) or not (body.get("sub") or body.get("unsub")):
+            return error_response("请求体里没有命令配置（需要 sub / unsub 字段）")
+        try:
+            config = cmdsubs.save_cfg(body)
+        except Exception as exc:
+            logger.exception("bilibili 保存命令配置异常")
+            return error_response(f"保存命令配置失败：{type(exc).__name__}: {exc}", status_code=500)
+        return json_response({"ok": True, "message": "命令配置已保存（立即生效）", "config": config})
+
+    async def api_cmd_subs(self):
+        return json_response({"ok": True, "records": cmdsubs.all()})
+
+    async def api_cmd_subs_delete(self):
+        body = await self._body()
+        rec_id = str(body.get("id") or "")
+        if not rec_id:
+            return error_response("缺少记录 id")
+        ok, message = cmdsubs.remove(rec_id)
+        if ok:
+            pusher.forget(rec_id)   # 顺带清掉它的推送去重记录
+        return json_response({"ok": ok, "message": message})
+
+    async def api_cmd_subs_clear(self):
+        try:
+            n = cmdsubs.clear()
+        except Exception as exc:
+            logger.exception("bilibili 清空命令订阅异常")
+            return error_response(f"清空失败：{type(exc).__name__}: {exc}", status_code=500)
+        return json_response({"ok": True, "message": f"已清空 {n} 条命令订阅记录", "cleared": n})
+
+    async def api_data_overview(self):
+        """数据管理页概览：各类数据条数 + 缓存现状 + data/ 目录文件清单。"""
+        files: list[dict] = []
+        try:
+            for p in sorted(paths.DATA_DIR.glob("*")):
+                if p.is_file():
+                    files.append({"name": p.name, "size": p.stat().st_size})
+        except OSError:
+            pass
+        img_count, img_bytes = imgcache.stats()
+        return json_response(
+            {
+                "ok": True,
+                "counts": {
+                    "subs": len(subs.all()),
+                    "live_subs": len(live_subs.all()),
+                    "cmd_subs": len(cmdsubs.all()),
+                    "push_state": pusher.state_count(),
+                },
+                "cache": {
+                    "page_cache": len(webcache.keys()),
+                    "images": {"count": img_count, "bytes": img_bytes},
+                },
+                "files": files,
+            }
+        )
+
+    async def api_data_cache_clear(self):
+        body = await self._body()
+        results: dict = {}
+        if body.get("page"):
+            webcache.clear()
+            results["page"] = "页面缓存已清空"
+        if body.get("images"):
+            n, freed = imgcache.clear()
+            results["images"] = f"已删除 {n} 个缓存图片，释放 {freed / 1024 / 1024:.1f} MB"
+        if not results:
+            return error_response("没有指定要清空的缓存（page / images）")
+        return json_response({"ok": True, "message": "；".join(results.values()), "results": results})
+
+    # ==================================================================
+    # 订阅/取消订阅命令（触发词在「命令」页配置，群消息监听实现）
+    # ==================================================================
+
+    @staticmethod
+    def _cmd_text(event: AstrMessageEvent) -> str:
+        """规整群消息文本，让触发词不管带不带 @机器人 / 唤醒前缀都能命中。
+
+        去掉开头的 `/`、`@某人 `（循环剥，兼容「/@xxx 订阅B站推送 123」这种叠法）。
+        """
+        t = str(event.message_str or "").strip()
+        while True:
+            if t[:1] == "/":
+                t = t[1:].lstrip()
+                continue
+            m = re.match(r"@[\S]{1,32}\s+", t)
+            if m:
+                t = t[m.end():]
+                continue
+            break
+        return t.strip()
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def bili_sub_cmd_listener(self, event: AstrMessageEvent):
+        """群内「订阅B站推送 / 取消B站推送」命令。
+
+        订阅成功落一条 {qq_id, group_id, platform, platform_id, bilibili_id, ...}
+        到 data/bilibili_cmd_subs.json（bili/cmdsubs.py），推送循环自动带上它。
+        """
+        text = self._cmd_text(event)
+        if not text:
+            return
+        cfg = cmdsubs.cfg()
+        platform_name = ""
+        try:
+            platform_name = str(event.platform_meta.name or "")
+        except Exception:
+            platform_name = ""
+        group_id = str(event.get_group_id() or "")
+        platform_id = str(event.get_platform_id() or "")
+        qq_id = str(event.get_sender_id() or "")
+
+        for kind in ("unsub", "sub"):
+            c = cfg.get(kind) or {}
+            if not c.get("enabled"):
+                continue
+            for trig in c.get("triggers") or []:
+                trig = str(trig).strip()
+                if not trig or not text.startswith(trig):
+                    continue
+                tail = text[len(trig):]
+                # 触发词后面要么没有内容，要么是空白/纯数字/冒号，才算命中
+                # （防止「订阅B站推送啦」这种恰好是前缀的消息误触发）
+                if tail and not (tail[:1].isspace() or tail.isdigit() or tail[:1] in "：:"):
+                    continue
+                rest = tail.strip().lstrip("：:").strip()
+                if c.get("admin_only") and not event.is_admin():
+                    return   # 仅管理员命令，非管理员发的直接忽略（不回复不拦截）
+                try:
+                    if kind == "sub":
+                        async for r in self._handle_sub_cmd(
+                            event, rest, qq_id=qq_id, group_id=group_id,
+                            platform=platform_name, platform_id=platform_id,
+                        ):
+                            yield r
+                    else:
+                        async for r in self._handle_unsub_cmd(
+                            event, rest, group_id=group_id, platform_id=platform_id,
+                        ):
+                            yield r
+                    event.stop_event()
+                except Exception as exc:
+                    logger.exception("bilibili 订阅命令处理异常")
+                    yield event.plain_result(f"命令执行出错：{type(exc).__name__}: {exc}")
+                return   # 命中一条触发词就结束
+
+    async def _handle_sub_cmd(
+        self, event: AstrMessageEvent, rest: str, *, qq_id: str, group_id: str,
+        platform: str, platform_id: str,
+    ):
+        """「订阅B站推送 <UID>」：查 UP 主 → 落库 → 回执。"""
+        uid = str(rest or "").strip()
+        if not uid:
+            yield event.plain_result(
+                "用法：订阅B站推送 <UP主UID>（纯数字，或粘贴 space.bilibili.com 主页链接）\n"
+                "例：订阅B站推送 946974"
+            )
+            return
+        # 允许直接粘 space 主页链接
+        if not uid.isdigit():
+            m = re.search(r"(\d{5,})", uid)
+            uid = m.group(1) if m else ""
+        if not uid:
+            yield event.plain_result("UID 没认出来：请发纯数字 UID，或粘贴 space.bilibili.com 主页链接")
+            return
+        uname = ""
+        try:
+            card = await client.user_card(uid)
+            uid = str(card.get("mid") or uid)
+            uname = str(card.get("uname") or "")
+        except Exception as exc:
+            logger.warning(f"订阅命令查 UP 主信息失败（UID {uid}）：{exc}")
+            # 查不到资料也允许订阅（uname 留空，推送时显示 UID）
+        ok, message, _rec = cmdsubs.add(
+            qq_id=qq_id,
+            group_id=group_id,
+            platform=platform,
+            platform_id=platform_id,
+            bilibili_id=uid,
+            uname=uname,
+        )
+        who = uname or f"UID {uid}"
+        if ok:
+            yield event.plain_result(
+                f"{message}：{who}\n"
+                f"之后该 UP 主的新动态会推送到本群；取消请发：取消B站推送 {uid}"
+            )
+        else:
+            yield event.plain_result(f"订阅失败：{message}")
+
+    async def _handle_unsub_cmd(
+        self, event: AstrMessageEvent, rest: str, *, group_id: str, platform_id: str,
+    ):
+        """「取消B站推送 [UID]」：带 UID 取消单个，不带取消本群全部。"""
+        uid = str(rest or "").strip()
+        if uid and not uid.isdigit():
+            m = re.search(r"(\d{5,})", uid)
+            uid = m.group(1) if m else ""
+        if uid:
+            ok, message = cmdsubs.remove_uid(platform_id, group_id, uid)
+            if ok:
+                pusher.forget(f"cmd-{uid}-{platform_id}-{group_id}")
+            yield event.plain_result(message)
+            return
+        # 不带 UID：取消本群全部命令订阅（先快照，删完逐条清推送记录）
+        group_recs = [
+            r for r in cmdsubs.all()
+            if r.get("platform_id") == platform_id and r.get("group_id") == group_id
+        ]
+        ok, message, _n = cmdsubs.remove_group(platform_id, group_id)
+        if ok:
+            for r in group_recs:
+                pusher.forget(str(r.get("id") or ""))
+        yield event.plain_result(message)
 
     # ==================================================================
     # 图片代理

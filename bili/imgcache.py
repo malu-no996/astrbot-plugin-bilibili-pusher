@@ -185,6 +185,39 @@ async def load(url: str) -> tuple[bool, bytes | None, str, str]:
     return True, data, ctype, ""
 
 
+def stats() -> tuple[int, int]:
+    """图片缓存现状：(文件数, 总字节数)。目录不存在返回 (0, 0)。"""
+    try:
+        files = [p for p in _CACHE_DIR.glob("*") if p.is_file()]
+    except OSError:
+        return 0, 0
+    total = 0
+    for p in files:
+        try:
+            total += p.stat().st_size
+        except OSError:
+            pass
+    return len(files), total
+
+
+def clear() -> tuple[int, int]:
+    """清空图片缓存目录，返回 (删除文件数, 释放字节数)。"""
+    n = freed = 0
+    try:
+        for p in _CACHE_DIR.glob("*"):
+            if not p.is_file():
+                continue
+            try:
+                freed += p.stat().st_size
+                p.unlink()
+                n += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return n, freed
+
+
 async def probe_size(url: str) -> tuple[int, int]:
     """探图片的真实宽高，失败返回 `(0, 0)`。
 

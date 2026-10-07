@@ -63,6 +63,12 @@ def cached(key: str) -> bool:
     return key in _data
 
 
+def size() -> int:
+    """当前缓存条数（数据管理页展示用）。"""
+    _load()
+    return len(_data)
+
+
 def clear() -> None:
     """清空全部页面缓存（退出/重新登录时换账号了，必须清）。"""
     _load()
