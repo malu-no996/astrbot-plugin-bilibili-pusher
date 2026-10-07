@@ -55,6 +55,7 @@ function notify(msg, type) {
   setTimeout(() => el.remove(), 4000);
 }
 function confirmBox(msg) { return window.confirm(msg); }
+function promptBox(msg, def) { return window.prompt(msg, def ?? ''); }   // 取消 = null
 
 /* ---------------- 全局状态（对应原 frag 的 init） ---------------- */
 
@@ -75,9 +76,9 @@ const S = {
   pusher: { enabled: false, interval_minutes: 120, jitter_minutes: 15, max_age_hours: 24, request_gap_seconds: 2, mode: 'auto', push_images: true, last_run: 0, next_run: 0, last_checked: 0, last_pushed: 0, last_error: '', running: false, saving: false, loading: false, message: '', details: [] },
   livepusher: { enabled: false, interval_minutes: 10, jitter_minutes: 3, request_gap_seconds: 2, mode: 'auto', push_images: true, last_run: 0, next_run: 0, last_checked: 0, last_pushed: 0, last_error: '', running: false, saving: false, loading: false, message: '', details: [] },
   // 弹窗
-  push: { show: false, mid: 0, uname: '', face: '', platforms: [], platform_id: '', group_id: '', group_name: '', types: ['archive'], keyword: '', loading: false, saving: false, error: '' },
+  push: { show: false, mid: 0, uname: '', face: '', platforms: [], binds: [], platform_id: '', group_id: '', group_name: '', types: ['archive'], keyword: '', loading: false, saving: false, error: '' },
   types: { show: false, id: '', uname: '', list: [], keyword: '', saving: false, error: '' },
-  livepush: { show: false, mid: 0, uname: '', face: '', room_id: 0, platforms: [], platform_id: '', group_id: '', group_name: '', notify_live: true, notify_offline: true, loading: false, saving: false, error: '' },
+  livepush: { show: false, mid: 0, uname: '', face: '', room_id: 0, platforms: [], binds: [], platform_id: '', group_id: '', group_name: '', notify_live: true, notify_offline: true, loading: false, saving: false, error: '' },
   livenotify: { show: false, id: '', uname: '', notify_live: true, notify_offline: true, saving: false, error: '' },
   // 命令配置 / 数据管理（页签）
   cmds: { config: null, static: [], loading: false },

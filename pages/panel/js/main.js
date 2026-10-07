@@ -86,6 +86,7 @@ const ACTIONS = {
   dataClearImages: () => dataClearCache('images'),
   bindsDel: (id) => bindsDel(id),
   bindsClear,
+  bindsEdit: (id) => bindsEdit(id),
   modalClose: () => { setModalHidden(); render(); },
 };
 
@@ -140,6 +141,8 @@ document.addEventListener('change', (e) => {
   }
   if (el.tagName === 'SELECT' && el.dataset.modalModel) {
     stateSet(el.dataset.modalModel, el.value);
+    // 弹窗的平台实例下拉（data-modal-pick = 状态名）：选中后自动回填该处理者绑定的群 ID
+    if (el.dataset.modalPick && typeof pushPlatformPicked === 'function') pushPlatformPicked(el.dataset.modalPick);
     return;
   }
   if (el.type === 'checkbox' && (el.dataset.model || el.dataset.modalModel)) {

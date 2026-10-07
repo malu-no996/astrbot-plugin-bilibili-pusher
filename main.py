@@ -191,6 +191,7 @@ class BilibiliPusherPlugin(Star):
         reg(f"{PREFIX}/cmd_subs/delete", self.api_cmd_subs_delete, ["POST"], "删除一条命令订阅")
         reg(f"{PREFIX}/cmd_subs/clear", self.api_cmd_subs_clear, ["POST"], "清空命令订阅记录")
         reg(f"{PREFIX}/binds", self.api_binds, ["GET"], "绑定的群列表（绑定B站推送命令落库）")
+        reg(f"{PREFIX}/binds/update", self.api_binds_update, ["POST"], "改绑定记录的群名/处理者名字")
         reg(f"{PREFIX}/binds/delete", self.api_binds_delete, ["POST"], "删除一条绑定群")
         reg(f"{PREFIX}/binds/clear", self.api_binds_clear, ["POST"], "清空绑定群")
         reg(f"{PREFIX}/data/overview", self.api_data_overview, ["GET"], "数据管理页概览")
@@ -668,6 +669,19 @@ class BilibiliPusherPlugin(Star):
     async def api_binds(self):
         return json_response({"ok": True, "binds": cmdsubs.all_binds()})
 
+    async def api_binds_update(self):
+        """改绑定记录：群名 / 处理者名字（QQ 官方平台拿不到群名和机器人名，可在这里自定义）。"""
+        body = await self._body()
+        bind_id = str(body.get("id") or "")
+        if not bind_id:
+            return error_response("缺少绑定记录 id")
+        ok, message = cmdsubs.bind_update(
+            bind_id,
+            group_name=str(body.get("group_name") or "").strip() if "group_name" in body else None,
+            handler_name=str(body.get("handler_name") or "").strip() if "handler_name" in body else None,
+        )
+        return json_response({"ok": ok, "message": message})
+
     async def api_binds_delete(self):
         body = await self._body()
         bind_id = str(body.get("id") or "")
@@ -777,8 +791,9 @@ class BilibiliPusherPlugin(Star):
                     continue
                 tail = text[len(trig):]
                 # 触发词后面要么没有内容，要么是空白/纯数字/冒号，才算命中
-                # （防止「订阅B站推送啦」这种恰好是前缀的消息误触发）
-                if tail and not (tail[:1].isspace() or tail.isdigit() or tail[:1] in "：:"):
+                # （防止「订阅B站推送啦」这种恰好是前缀的消息误触发）；
+                # bind 例外：尾巴是自由文本（自定义群名），只要是空白开头就命中
+                if tail and not tail[:1].isspace() and not (kind != "bind" and (tail.isdigit() or tail[:1] in "：:")):
                     continue
                 rest = tail.strip().lstrip("：:").strip()
                 # bind 的权限不走 admin_only 开关（固定要求群主/群管理员/AstrBot 管理员，见 _bind_allowed）
@@ -799,7 +814,7 @@ class BilibiliPusherPlugin(Star):
                             event.stop_event()
                             return
                         async for r in self._handle_bind_cmd(
-                            event, qq_id=qq_id, group_id=group_id,
+                            event, rest, qq_id=qq_id, group_id=group_id,
                             platform=platform_name, platform_id=platform_id,
                         ):
                             yield r
@@ -841,10 +856,17 @@ class BilibiliPusherPlugin(Star):
             return False
 
     async def _handle_bind_cmd(
-        self, event: AstrMessageEvent, *, qq_id: str, group_id: str,
+        self, event: AstrMessageEvent, rest: str, *, qq_id: str, group_id: str,
         platform: str, platform_id: str,
     ):
-        """「绑定B站推送」：取群名（群的名称，不是群员昵称）→ 群 ID + 群名持久化。"""
+        """「绑定B站推送 [自定义群名]」：群 ID + 群名 + 处理者持久化。
+
+        - 处理者 ID = 处理这条命令的机器人 self_id（event.get_self_id()）
+        - 处理者名字：OneBot 查 get_login_info 拿机器人昵称；QQ 官方拿不到（可在页面改）
+        - 群名：命令尾巴可自定义（QQ 官方平台拿不到群名，主要靠这个）；否则自动取：
+          OneBot 事件自带 group_name → 没有再 get_group_info 现查；都不是发命令人的昵称
+        """
+        custom_name = str(rest or "").strip()
         group_name = ""
         g = getattr(event.message_obj, "group", None)
         if g is not None:
@@ -857,18 +879,40 @@ class BilibiliPusherPlugin(Star):
                 group_name = str((info or {}).get("group_name") or "")
             except Exception as exc:
                 logger.warning(f"获取群名失败（群 {group_id}）：{exc}")
+        if custom_name:
+            group_name = custom_name   # 命令里带了自定义群名 → 以它为准
+        # 处理者：哪个机器人处理这条命令，就记它的 ID
+        handler_id = ""
+        try:
+            handler_id = str(event.get_self_id() or "")
+        except Exception:
+            handler_id = ""
+        if not handler_id:
+            handler_id = str(getattr(event.message_obj, "self_id", "") or "")
+        # 处理者名字：OneBot 查 get_login_info；其它平台拿不到就留空（页面可改）
+        handler_name = ""
+        if bot is not None:
+            try:
+                login = await bot.call_action("get_login_info")
+                handler_name = str((login or {}).get("nickname") or "")
+            except Exception:
+                handler_name = ""
         ok, message = cmdsubs.bind_add(
             platform_id=platform_id,
             group_id=group_id,
             platform=platform,
             group_name=group_name,
             qq_id=qq_id,
+            handler_id=handler_id,
+            handler_name=handler_name,
         )
         if ok:
             shown = group_name or "（未取到群名，仅记录群 ID）"
+            who = f"{handler_name}（{handler_id}）" if handler_name else handler_id or "未知"
             yield event.plain_result(
                 f"{message}：{shown}（群 {group_id}）\n"
-                f"本群已登记到 B 站推送服务；取消绑定请在面板「数据」页删除该记录"
+                f"处理机器人：{who}\n"
+                f"本群已登记到 B 站推送服务；群名/处理者名字可在面板「数据」页改，取消绑定在「数据」页删除该记录"
             )
         else:
             yield event.plain_result(f"绑定失败：{message}")

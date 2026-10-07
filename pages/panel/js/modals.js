@@ -1,6 +1,24 @@
 /* 弹窗（动态推送 / 推送条件 / 直播订阅 / 推送事件）
  * 供动态订阅、直播订阅、关注、直播各页签调用。 */
 
+/* 从绑定记录构建平台实例候选（按 platform_id 去重，保留首条用于回填群 ID） */
+function bindPlatformOptions(binds) {
+  const seen = new Set();
+  const out = [];
+  for (const b of binds || []) {
+    const pid = String(b.platform_id || '');
+    if (!pid || seen.has(pid)) continue;
+    seen.add(pid);
+    out.push({ platform_id: pid, handler_id: b.handler_id || '', handler_name: b.handler_name || '', group_id: b.group_id || '', group_name: b.group_name || '' });
+  }
+  return out;
+}
+/* 下拉选项文案：处理者名字 + 处理者 ID（没名字只显示 ID）；无绑定记录时退回平台实例列表 */
+function platformOptionLabel(p) {
+  const who = [p.handler_name, p.handler_id].filter(Boolean).join(' ');
+  return who || p.platform_id;
+}
+
 async function pushModalOpen(u) {
   // u 可以是对象（关注列表卡片）或 mid（按 id 从 finder/列表里找）
   let user = u;
@@ -13,14 +31,31 @@ async function pushModalOpen(u) {
   P.platform_id = ''; P.group_id = ''; P.group_name = '';
   P.types = ['archive']; P.keyword = '';
   P.error = ''; P.saving = false; P.show = true; P.loading = true;
-  P.platforms = [];
+  P.platforms = []; P.binds = [];
   render();
-  const j = await GET('targets');
+  const [j, bj] = await Promise.all([GET('targets'), GET('binds')]);
   if (j.ok) {
     P.platforms = j.platforms || [];
-    if (P.platforms.length === 1) P.platform_id = P.platforms[0].id;
   } else P.error = j.message || '拉取平台实例失败';
+  P.binds = bj.ok ? bindPlatformOptions(bj.binds) : [];
+  if (P.binds.length === 1) {
+    P.platform_id = P.binds[0].platform_id;
+    P.group_id = P.binds[0].group_id; P.group_name = P.binds[0].group_name;
+  } else if (!P.binds.length && P.platforms.length === 1) {
+    P.platform_id = P.platforms[0].id;
+  }
   P.loading = false;
+  render();
+}
+
+/* 弹窗里选平台实例（来自绑定记录）→ 自动回填该机器人绑定的群 ID / 群名 */
+function pushPlatformPicked(which) {
+  const P = S[which];
+  const b = (P.binds || []).find(x => x.platform_id === P.platform_id);
+  if (b) {
+    P.group_id = b.group_id || P.group_id;
+    P.group_name = b.group_name || P.group_name;
+  }
   render();
 }
 
@@ -31,9 +66,10 @@ async function pushModalSave() {
   if (!String(P.group_id || '').trim()) { P.error = '请填写群 ID（该平台群消息事件里的 session_id）'; render(); return; }
   P.saving = true; P.error = ''; render();
   const plat = P.platforms.find(x => x.id === P.platform_id) || {};
+  const bind = (P.binds || []).find(x => x.platform_id === P.platform_id) || {};
   const j = await POST('subs/save', {
     mid: P.mid, uname: P.uname, face: P.face,
-    platform_id: P.platform_id, platform_name: plat.name || plat.type || P.platform_id,
+    platform_id: P.platform_id, platform_name: plat.name || bind.handler_name || plat.type || P.platform_id,
     group_id: String(P.group_id).trim(),
     group_name: P.group_name || '',
     types: P.types.slice(),
@@ -74,13 +110,19 @@ async function livePushModalOpen(u) {
   P.platform_id = ''; P.group_id = ''; P.group_name = '';
   P.notify_live = true; P.notify_offline = true;
   P.error = ''; P.saving = false; P.show = true; P.loading = true;
-  P.platforms = [];
+  P.platforms = []; P.binds = [];
   render();
-  const j = await GET('targets');
+  const [j, bj] = await Promise.all([GET('targets'), GET('binds')]);
   if (j.ok) {
     P.platforms = j.platforms || [];
-    if (P.platforms.length === 1) P.platform_id = P.platforms[0].id;
   } else P.error = j.message || '拉取平台实例失败';
+  P.binds = bj.ok ? bindPlatformOptions(bj.binds) : [];
+  if (P.binds.length === 1) {
+    P.platform_id = P.binds[0].platform_id;
+    P.group_id = P.binds[0].group_id; P.group_name = P.binds[0].group_name;
+  } else if (!P.binds.length && P.platforms.length === 1) {
+    P.platform_id = P.platforms[0].id;
+  }
   P.loading = false;
   render();
 }
@@ -92,9 +134,10 @@ async function livePushModalSave() {
   if (!String(P.group_id || '').trim()) { P.error = '请填写群 ID（该平台群消息事件里的 session_id）'; render(); return; }
   P.saving = true; P.error = ''; render();
   const plat = P.platforms.find(x => x.id === P.platform_id) || {};
+  const bind = (P.binds || []).find(x => x.platform_id === P.platform_id) || {};
   const j = await POST('live_subs/save', {
     mid: P.mid, uname: P.uname, face: P.face, room_id: P.room_id,
-    platform_id: P.platform_id, platform_name: plat.name || plat.type || P.platform_id,
+    platform_id: P.platform_id, platform_name: plat.name || bind.handler_name || plat.type || P.platform_id,
     group_id: String(P.group_id).trim(),
     group_name: P.group_name || '',
     notify_live: !!P.notify_live, notify_offline: !!P.notify_offline,
@@ -133,6 +176,10 @@ function renderModal() {
     `<label class="check"><input type="checkbox" data-check="${list === 'push' ? 'push.types' : 'types.list'}" value="${k.v}" ${(list === 'push' ? S.push.types : S.types.list).includes(k.v) ? 'checked' : ''}> ${k.t}</label>`).join('');
   const platformOptions = (list, sel) => {
     const P = S[list];
+    // 优先用绑定记录（处理者名字 + 处理者 ID）；没有任何绑定才退回 AstrBot 平台实例列表
+    if (P.binds && P.binds.length) {
+      return P.binds.map(p => `<option value="${esc(p.platform_id)}"${p.platform_id === sel ? ' selected' : ''}>${esc(platformOptionLabel(p))}</option>`).join('');
+    }
     return P.platforms.map(p => `<option value="${esc(p.id)}"${p.id === sel ? ' selected' : ''}>${esc(p.name || p.id)}（${esc(p.type || p.id)}）</option>`).join('');
   };
 
@@ -142,14 +189,14 @@ function renderModal() {
     html = `<div class="modal" data-modal="push"><div class="modal-box">
       <h2>动态推送 <span class="hint">${esc(P.uname || 'UID ' + P.mid)}</span></h2>
       <div class="row"><label>平台实例</label>
-        <select data-modal-model="push.platform_id" class="sel" ${P.loading ? 'disabled' : ''}>
+        <select data-modal-model="push.platform_id" data-modal-pick="push" class="sel" ${P.loading ? 'disabled' : ''}>
           <option value="">— 请选择 —</option>${platformOptions('push', P.platform_id)}
         </select>
-        <span class="muted">AstrBot「消息平台」里配置的实例 ID</span></div>
+        <span class="muted">${P.binds && P.binds.length ? '处理者 = 绑定该群的机器人；选中自动填群 ID' : 'AstrBot「消息平台」里配置的实例 ID'}</span></div>
       <div class="row"><label>群 ID</label>
         <input type="text" data-modal-model="push.group_id" value="${esc(P.group_id)}" placeholder="该平台群消息事件里的 session_id（如 QQ 群号）" class="kw-input">
         <input type="text" data-modal-model="push.group_name" value="${esc(P.group_name)}" placeholder="群备注名（可选）" style="max-width:140px"></div>
-      <p class="muted" style="margin-top:0">群 ID 填写方式：在目标群触发一次消息，在 AstrBot 日志/会话列表里能看到该群的 session_id（aiocqhttp 平台就是 QQ 群号）。</p>
+      <p class="muted" style="margin-top:0">${P.binds && P.binds.length ? '群 ID 默认填处理者绑定的群，可直接改。' : ''}没有绑定记录时：在目标群发一次「绑定B站推送」，这里就会自动带出；或手动填 session_id。</p>
       <div class="row"><label>订阅消息类型</label><div class="flex">${kindsChecks('push')}</div></div>
       ${!P.types.length ? '<p class="err" style="margin-top:0">至少选择一个消息类型（默认：投稿）</p>' : ''}
       <div class="row"><label>图文需包含</label>
@@ -182,9 +229,10 @@ function renderModal() {
     html = `<div class="modal" data-modal="livepush"><div class="modal-box">
       <h2>直播订阅 <span class="hint">${esc(P.uname || 'UID ' + P.mid)}</span></h2>
       <div class="row"><label>平台实例</label>
-        <select data-modal-model="livepush.platform_id" class="sel" ${P.loading ? 'disabled' : ''}>
+        <select data-modal-model="livepush.platform_id" data-modal-pick="livepush" class="sel" ${P.loading ? 'disabled' : ''}>
           <option value="">— 请选择 —</option>${platformOptions('livepush', P.platform_id)}
-        </select></div>
+        </select>
+        ${P.binds && P.binds.length ? '<span class="muted">处理者 = 绑定该群的机器人；选中自动填群 ID</span>' : ''}</div>
       <div class="row"><label>群 ID</label>
         <input type="text" data-modal-model="livepush.group_id" value="${esc(P.group_id)}" placeholder="该平台群消息事件里的 session_id（如 QQ 群号）" class="kw-input">
         <input type="text" data-modal-model="livepush.group_name" value="${esc(P.group_name)}" placeholder="群备注名（可选）" style="max-width:140px"></div>

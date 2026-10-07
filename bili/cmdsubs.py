@@ -311,10 +311,19 @@ def bind_add(
     platform: str,
     group_name: str = "",
     qq_id: str = "",
+    handler_id: str = "",
+    handler_name: str = "",
 ) -> tuple[bool, str]:
-    """绑定一个群：持久化群 ID + 群名。同平台同群只保留一条（重复绑定 = 刷新群名）。"""
+    """绑定一个群：持久化群 ID + 群名 + 处理者（处理这条命令的机器人）。
+
+    同平台同群只保留一条（重复绑定 = 刷新群名 / 处理者）。
+    handler_id = 处理命令的机器人 ID（event.get_self_id()）；
+    handler_name = 机器人名字（OneBot 查 get_login_info；QQ 官方拿不到，可自定义/页面改）。
+    """
     pid, gid = str(platform_id or ""), str(group_id or "")
     group_name = str(group_name or "").strip()
+    handler_id = str(handler_id or "").strip()
+    handler_name = str(handler_name or "").strip()
     if not gid or not pid:
         return False, "拿不到群 ID 或平台实例，无法绑定（请确认是在群内发命令）"
     with _lock:
@@ -327,9 +336,15 @@ def bind_add(
                 if qq_id and not b.get("bound_by"):
                     b["bound_by"] = str(qq_id)
                     changed = True
+                if handler_id and b.get("handler_id") != handler_id:
+                    b["handler_id"] = handler_id
+                    changed = True
+                if handler_name and b.get("handler_name") != handler_name:
+                    b["handler_name"] = handler_name
+                    changed = True
                 if changed:
                     _save_binds()
-                return True, "本群已绑定过（已刷新群名）"
+                return True, "本群已绑定过（已刷新群名 / 处理者）"
         _binds.append(
             {
                 "id": f"bind-{pid}-{gid}",
@@ -337,12 +352,34 @@ def bind_add(
                 "group_name": group_name,
                 "platform": str(platform or ""),
                 "platform_id": pid,
+                "handler_id": handler_id,
+                "handler_name": handler_name,
                 "bound_by": str(qq_id or ""),
                 "bound_at": int(time.time()),
             }
         )
         _save_binds()
         return True, "绑定成功"
+
+
+def bind_update(bind_id: str, *, group_name: str | None = None, handler_name: str | None = None) -> tuple[bool, str]:
+    """改绑定记录的群名 / 处理者名字（数据管理页「编辑」用；传 None = 不改这项）。"""
+    bind_id = str(bind_id)
+    with _lock:
+        for b in _binds:
+            if str(b.get("id")) == bind_id:
+                changed = False
+                if group_name is not None and b.get("group_name") != group_name:
+                    b["group_name"] = group_name
+                    changed = True
+                if handler_name is not None and b.get("handler_name") != handler_name:
+                    b["handler_name"] = handler_name
+                    changed = True
+                if changed:
+                    _save_binds()
+                    return True, "已保存"
+                return True, "内容没变"
+        return False, "绑定记录不存在（可能已被删除）"
 
 
 def bind_remove(bind_id: str) -> tuple[bool, str]:

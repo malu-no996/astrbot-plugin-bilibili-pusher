@@ -49,6 +49,19 @@ async function bindsClear() {
   await loadData();
 }
 
+/* 编辑绑定记录：群名 / 处理者名字（QQ 官方平台拿不到群名和机器人名，在这里自定义） */
+async function bindsEdit(id) {
+  const b = S.data.binds.find(x => String(x.id) === String(id));
+  if (!b) return;
+  const gname = promptBox('群名（群的名称，可自定义）', b.group_name || '');
+  if (gname === null) return;
+  const hname = promptBox('处理者名字（处理这条绑定的机器人名字，可自定义）', b.handler_name || '');
+  if (hname === null) return;
+  const j = await POST('binds/update', { id: b.id, group_name: gname.trim(), handler_name: hname.trim() });
+  notify(j.message || (j.ok ? '已保存' : '保存失败'), j.ok ? 'ok' : 'err');
+  if (j.ok) await loadData();
+}
+
 function renderData() {
   const D = S.data;
   const o = D.overview || {};
@@ -92,21 +105,23 @@ function renderData() {
   }
   html += `</div>`;
   html += `<div class="card"><h2>绑定的群（绑定B站推送服务）</h2>
-    <p class="muted" style="margin-top:0">群内发「<b>绑定B站推送</b>」登记的群（仅群主/群管理员/AstrBot 管理员可用），持久化保存群 ID + <b>群名</b>（群的名称，非群员昵称），落 data/bilibili_binds.json。</p>
+    <p class="muted" style="margin-top:0">群内发「<b>绑定B站推送 [自定义群名]</b>」登记的群（仅群主/群管理员/AstrBot 管理员可用），持久化保存群 ID + 群名 + <b>处理者</b>（处理这条命令的机器人 ID 和名字）。QQ 官方平台拿不到群名/机器人名，可在命令里带群名或在这里点「编辑」自定义。</p>
     <div class="actions" style="margin:0 0 10px"><button class="red" data-act="bindsClear" ${D.loading || !D.binds.length ? 'disabled' : ''}>清空全部绑定</button></div>`;
   if (!D.binds.length) {
     html += `<p class="muted">暂无绑定群</p>`;
   } else {
-    html += `<table><thead><tr><th>群名</th><th>群 ID</th><th>平台</th><th>平台实例</th><th>绑定人</th><th>绑定时间</th><th></th></tr></thead><tbody>`;
+    html += `<table><thead><tr><th>群名</th><th>群 ID</th><th>平台</th><th>处理者 ID</th><th>处理者名字</th><th>绑定人</th><th>绑定时间</th><th></th></tr></thead><tbody>`;
     for (const r of D.binds) {
       html += `<tr>
         <td>${esc(r.group_name || '（未取到群名）')}</td>
         <td>${esc(r.group_id || '-')}</td>
         <td>${esc(platformLabel(r.platform))}</td>
-        <td>${esc(r.platform_id || '-')}</td>
+        <td>${esc(r.handler_id || '-')}</td>
+        <td>${esc(r.handler_name || '-')}</td>
         <td>${esc(r.bound_by || '-')}</td>
         <td>${fmt(r.bound_at)}</td>
-        <td><button class="red" data-act="bindsDel" data-arg="${esc(r.id)}">删除</button></td>
+        <td><button class="ghost" data-act="bindsEdit" data-arg="${esc(r.id)}">编辑</button>
+          <button class="red" data-act="bindsDel" data-arg="${esc(r.id)}">删除</button></td>
       </tr>`;
     }
     html += `</tbody></table>`;
