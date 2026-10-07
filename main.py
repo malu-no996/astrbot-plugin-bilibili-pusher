@@ -349,37 +349,29 @@ class BilibiliPusherPlugin(Star):
         """登录账号的关注列表（需登录）。
 
         tagid 为空 / -1 = 全部，其余为分组 id；kw 非空时按昵称模糊搜索（忽略分组与翻页）。
-        搜索结果不缓存（每次都是手动触发）；普通分页结果缓存，手动「刷新列表」传 force=1。
+        分页与搜索结果都缓存（key 含参数）；force=1 跳过缓存强制请求 B 站。
         """
         pn = request.query.get("pn", 1, type=int)
         ps = request.query.get("ps", 50, type=int)
         tagid = request.query.get("tagid", "")
         kw = request.query.get("kw", "")
-        force = request.query.get("force") == "1"
-        if not kw:
-            key = f"followings:{pn}:{ps}:{tagid}"
-            if not force:
-                hit = webcache.get(key)
-                if hit is not None:
-                    return json_response({"ok": True, "cached": True, **hit})
-            err, data = await self._call(
-                client.followings(pn=pn, ps=ps, tagid=tagid, kw=kw), "读取关注列表失败"
-            )
-            if err:
-                hit = webcache.get(key)
-                if hit is not None:
-                    return json_response({"ok": True, "cached": True, **hit})
-                return err
-            data = data if isinstance(data, dict) else {}
-            if data:
-                webcache.put(key, data)
-            return json_response({"ok": True, **data})
+        key = f"followings:kw:{kw}" if kw else f"followings:{pn}:{ps}:{tagid}"
+        if request.query.get("force") != "1":
+            hit = webcache.get(key)
+            if hit is not None:
+                return json_response({"ok": True, "cached": True, **hit})
         err, data = await self._call(
-            client.followings(pn=pn, ps=ps, tagid=tagid, kw=kw), "搜索关注失败"
+            client.followings(pn=pn, ps=ps, tagid=tagid, kw=kw), "读取关注列表失败"
         )
         if err:
+            hit = webcache.get(key)
+            if hit is not None:
+                return json_response({"ok": True, "cached": True, **hit})
             return err
-        return json_response({"ok": True, **(data if isinstance(data, dict) else {})})
+        data = data if isinstance(data, dict) else {}
+        if data:
+            webcache.put(key, data)
+        return json_response({"ok": True, **data})
 
     async def api_user(self):
         """按 UID 查 UP 主信息（未登录也可，用于「订阅」页的指定 UID 查找）。"""

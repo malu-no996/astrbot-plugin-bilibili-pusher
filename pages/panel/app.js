@@ -67,7 +67,7 @@ const S = {
   login: { busy: false, tip: '', key: '', url: '', timer: null },
   sessions: { loading: false, list: [], error: '' },
   msgs: { loading: false, talker: '', name: '', list: [], error: '' },
-  follow: { loading: false, list: [], total: 0, pn: 1, error: '', tags: [], tagid: -1, kw: '', searching: false, scanned: 0, total_all: 0, fromCache: false },
+  follow: { loading: false, list: [], total: 0, pn: 1, error: '', tags: [], tagid: -1, kw: '', searching: false, search_kw: '', scanned: 0, total_all: 0, fromCache: false },
   dyn: { loading: false, source: 'follow', type: 'all', uid: '', uname: '', offset: '', list: [], error: '' },
   lives: { loading: false, list: [], total_live: 0, error: '', scanned: 0, has_more: false, next_pn: 1 },
   subs: { loading: false, list: [], error: '' },
@@ -250,19 +250,24 @@ async function followTags(force) {
 }
 function followTag(tagid) {
   if (S.follow.tagid === tagid && !S.follow.searching) return;
-  S.follow.tagid = tagid; S.follow.pn = 1; S.follow.kw = ''; S.follow.searching = false;
+  S.follow.tagid = tagid; S.follow.pn = 1; S.follow.kw = ''; S.follow.searching = false; S.follow.search_kw = '';
   loadFollowings(1);
 }
 async function followSearch() {
   const kw = (S.follow.kw || '').trim();
   if (!kw) { S.follow.searching = false; loadFollowings(1); return; }
   if (!S.state.logged) { S.follow.error = '搜索关注需要先登录'; render(); return; }
+  // 同一个关键词连点两次「搜索」= 不走缓存强制拉新；首次搜索读缓存
+  const force = S.follow.searching && S.follow.search_kw === kw;
   S.follow.loading = true; S.follow.error = ''; render();
-  const j = await GET('followings', { kw, ps: 50 });
+  const params = { kw, ps: 50 };
+  if (force) params.force = 1;
+  const j = await GET('followings', params);
   if (j.ok) {
     S.follow.list = j.items || []; S.follow.total = j.total || 0; S.follow.pn = 1;
-    S.follow.searching = true; S.follow.scanned = j.scanned || 0; S.follow.total_all = j.total_all || 0;
-    S.follow.fromCache = false;
+    S.follow.searching = true; S.follow.search_kw = kw;
+    S.follow.scanned = j.scanned || 0; S.follow.total_all = j.total_all || 0;
+    S.follow.fromCache = !!j.cached;
   } else S.follow.error = j.message || '搜索关注失败';
   S.follow.loading = false; render();
 }
@@ -289,7 +294,8 @@ function renderFollow() {
     <button class="ghost" data-act="followSearch" ${!S.state.logged || f.loading ? 'disabled' : ''}>${f.loading ? '加载中…' : '搜索'}</button>
     <button class="ghost" data-act="followTags" ${!S.state.logged || f.loading ? 'disabled' : ''}>刷新分组</button>
     <button class="ghost" data-act="followings1" ${!S.state.logged || f.loading ? 'disabled' : ''}>刷新列表</button>
-  </div>`;
+  </div>
+  <p class="muted" style="margin-top:2px">搜索和列表都走缓存；<b>同一个关键词连点两次「搜索」</b>或点「刷新列表」才重新请求 B 站。</p>`;
   html += `<div class="flex" style="margin-bottom:8px">
     ${f.total ? `<span class="muted">共 ${f.total} 个 · 第 ${f.pn} 页</span>` : (S.state.logged ? '' : '<span class="muted">需先在「账号」页签扫码登录</span>')}
     ${f.searching ? `<span class="muted">（搜索模式：已扫描 ${f.scanned} 个${f.scanned < f.total_all ? ' / 共 ' + f.total_all + ' 个关注' : ''}）</span>` : ''}
