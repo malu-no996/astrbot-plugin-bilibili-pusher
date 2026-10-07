@@ -31,13 +31,15 @@ async function pushModalOpen(u) {
   P.platform_id = ''; P.group_id = ''; P.group_name = '';
   P.types = ['archive']; P.keyword = '';
   P.error = ''; P.saving = false; P.show = true; P.loading = true;
-  P.platforms = []; P.binds = [];
+  P.platforms = []; P.binds = []; P.platform_opts = [];
   render();
   const [j, bj] = await Promise.all([GET('targets'), GET('binds')]);
   if (j.ok) {
     P.platforms = j.platforms || [];
   } else P.error = j.message || '拉取平台实例失败';
-  P.binds = bj.ok ? bindPlatformOptions(bj.binds) : [];
+  // binds 存全量（群下拉要列出一机绑定的所有群）；platform_opts 是按平台去重后的平台下拉选项
+  P.binds = bj.ok ? (bj.binds || []) : [];
+  P.platform_opts = bindPlatformOptions(P.binds);
   if (P.binds.length) {
     // 有绑定记录：只有一个平台实例时自动选中并带上它绑定的第一个群
     const pids = [...new Set(P.binds.map(b => b.platform_id))];
@@ -136,13 +138,14 @@ async function livePushModalOpen(u) {
   P.platform_id = ''; P.group_id = ''; P.group_name = '';
   P.notify_live = true; P.notify_offline = true;
   P.error = ''; P.saving = false; P.show = true; P.loading = true;
-  P.platforms = []; P.binds = [];
+  P.platforms = []; P.binds = []; P.platform_opts = [];
   render();
   const [j, bj] = await Promise.all([GET('targets'), GET('binds')]);
   if (j.ok) {
     P.platforms = j.platforms || [];
   } else P.error = j.message || '拉取平台实例失败';
-  P.binds = bj.ok ? bindPlatformOptions(bj.binds) : [];
+  P.binds = bj.ok ? (bj.binds || []) : [];
+  P.platform_opts = bindPlatformOptions(P.binds);
   if (P.binds.length) {
     const pids = [...new Set(P.binds.map(b => b.platform_id))];
     if (pids.length === 1) {
@@ -206,9 +209,9 @@ function renderModal() {
     `<label class="check"><input type="checkbox" data-check="${list === 'push' ? 'push.types' : 'types.list'}" value="${k.v}" ${(list === 'push' ? S.push.types : S.types.list).includes(k.v) ? 'checked' : ''}> ${k.t}</label>`).join('');
   const platformOptions = (list, sel) => {
     const P = S[list];
-    // 优先用绑定记录（处理者名字 + 处理者 ID）；没有任何绑定才退回 AstrBot 平台实例列表
-    if (P.binds && P.binds.length) {
-      return P.binds.map(p => `<option value="${esc(p.platform_id)}"${p.platform_id === sel ? ' selected' : ''}>${esc(platformOptionLabel(p))}</option>`).join('');
+    // 优先用绑定记录（处理者名字 + 处理者 ID，按平台去重）；没有任何绑定才退回 AstrBot 平台实例列表
+    if (P.platform_opts && P.platform_opts.length) {
+      return P.platform_opts.map(p => `<option value="${esc(p.platform_id)}"${p.platform_id === sel ? ' selected' : ''}>${esc(platformOptionLabel(p))}</option>`).join('');
     }
     return P.platforms.map(p => `<option value="${esc(p.id)}"${p.id === sel ? ' selected' : ''}>${esc(p.name || p.id)}（${esc(p.type || p.id)}）</option>`).join('');
   };
