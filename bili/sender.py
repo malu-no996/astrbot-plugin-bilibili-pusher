@@ -29,6 +29,16 @@ def session_of(platform_id: str, group_id: str) -> str:
     return f"{str(platform_id or '').strip()}:GroupMessage:{str(group_id or '').strip()}"
 
 
+def _inst_id(p) -> str:
+    """平台实例的唯一 ID。⚠️ Platform 实例没有 .id 属性（getattr 恒为空），
+    真实 ID 在 meta().id（来自配置项 config["id"]）—— context.send_message
+    就是用 meta().id 来匹配 origin 里的平台段的，这里必须保持一致。"""
+    try:
+        return str(p.meta().id or "") or str((getattr(p, "config", None) or {}).get("id") or "")
+    except Exception:
+        return str((getattr(p, "config", None) or {}).get("id") or "")
+
+
 def platform_type(platform_id: str) -> str:
     """按实例 ID 查平台适配器类型（meta().name，如 qq_official / aiocqhttp）。
 
@@ -39,11 +49,11 @@ def platform_type(platform_id: str) -> str:
         return ""
     try:
         for p in _context.platform_manager.get_insts():
-            if str(getattr(p, "id", "") or "") == str(platform_id):
+            if _inst_id(p) == str(platform_id):
                 try:
                     return str(p.meta().name or "").strip().lower()
                 except Exception:
-                    return str(getattr(p, "type", "") or "").strip().lower()
+                    return ""
     except Exception:
         pass
     return ""

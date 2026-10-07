@@ -121,15 +121,19 @@ class BilibiliPusherPlugin(Star):
             insts = []
         for p in insts or []:
             # 平台适配器类型 = meta().name（如 qq_official / aiocqhttp）；
-            # Platform 实例没有 .type 属性，之前 getattr(p,"type") 恒为空。
+            # 实例 ID = meta().id（来自 config["id"]）—— Platform 实例没有
+            # .id/.name 属性，之前 getattr(p, "id") 恒为空导致下拉框没数据。
             try:
-                ptype = str(p.meta().name or "")
+                meta = p.meta()
+                ptype = str(meta.name or "")
+                pid = str(meta.id or "")
             except Exception:
-                ptype = str(getattr(p, "type", "") or "")
+                ptype = ""
+                pid = str((getattr(p, "config", None) or {}).get("id") or "")
             out.append(
                 {
-                    "id": str(getattr(p, "id", "") or ""),
-                    "name": str(getattr(p, "name", "") or ""),
+                    "id": pid,
+                    "name": pid or ptype,
                     "type": ptype,
                     "enable": bool(getattr(p, "enable", True)),
                 }
@@ -892,7 +896,11 @@ class BilibiliPusherPlugin(Star):
         if not handler_id.isdigit():
             try:
                 for inst in self.context.platform_manager.get_insts():
-                    if str(getattr(inst, "id", "") or "") == platform_id:
+                    try:
+                        iid = str(inst.meta().id or "")
+                    except Exception:
+                        iid = str((getattr(inst, "config", None) or {}).get("id") or "")
+                    if iid == platform_id:
                         icfg = getattr(inst, "config", None) or {}
                         cand = str(icfg.get("appid") or "")
                         if cand:
@@ -918,13 +926,7 @@ class BilibiliPusherPlugin(Star):
             handler_name=handler_name,
         )
         if ok:
-            shown = group_name or "（未取到群名，仅记录群 ID）"
-            who = f"{handler_name}（{handler_id}）" if handler_name else handler_id or "未知"
-            yield event.plain_result(
-                f"{message}：{shown}（群 {group_id}）\n"
-                f"处理机器人：{who}\n"
-                f"本群已登记到 B 站推送服务；群名/处理者名字可在面板「数据」页改，取消绑定在「数据」页删除该记录"
-            )
+            yield event.plain_result("绑定B站推送成功")
         else:
             yield event.plain_result(f"绑定失败：{message}")
 
