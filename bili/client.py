@@ -1125,9 +1125,12 @@ async def _api_get_qs(url: str, pairs: list[tuple], referer: str):
 async def live_statuses(uids) -> dict:
     """批量查多个 UP 主的直播状态。
 
-    接口：`/xlive/web-ucenter/v1/live/Status?uid=1&uid=2...`，返回 `{uid: {...}}`。
-    不需要 WBI，未登录也可（返回字段较少：无昵称昵图，需要时用关注列表补）。
-    一次最多 50 个，超了分批；节流在 `_throttle()` 里，串行不会并发。
+    ⚠️ 2026-10 起 `/xlive/web-ucenter/v1/live/Status` 被 B 站下线（返回 404 的
+    HTML 页，前端只看到「接口返回非 JSON（HTTP 404）」，和 9 月下线的
+    GetWebList 是同一类事）。改用 `room/v1/Room/getRoomInfoOld?mid=<uid>`
+    逐个查（无需登录，字段名恰好兼容 `_live_room_brief`：`liveStatus` /
+    `title` / `cover` / `roomid` / `online`）。
+    请求间隔仍由 `_throttle()` 统一排队，批量时就是串行逐个请求。
     """
     ids: list[str] = []
     for u in _list(uids):
@@ -1137,37 +1140,43 @@ async def live_statuses(uids) -> dict:
     if not ids:
         return {}
     out: dict[str, dict] = {}
-    for i in range(0, len(ids), 50):
-        chunk = ids[i : i + 50]
+    for uid in ids:
         raw = await _api_get_qs(
-            LIVE_API + "/xlive/web-ucenter/v1/live/Status",
-            [("uid", u) for u in chunk],
+            LIVE_API + "/room/v1/Room/getRoomInfoOld",
+            [("mid", uid)],
             "https://live.bilibili.com/",
         )
-        data = _dict(raw)
-        for key, val in data.items():
-            if not isinstance(val, dict):
-                continue
-            mid = str(val.get("uid") or key)
-            out[mid] = _live_room_brief(val, mid=mid)
+        room = _dict(raw)
+        if not room:
+            continue
+        brief = _live_room_brief(room, mid=uid)
+        out[str(brief.get("mid") or uid)] = brief
     return out
 
 
 async def live_status(uid) -> dict:
     """单个 UP 主的直播状态。
 
-    批量接口只返回「已开播或被关注」的用户；查不到就当作**未开播**（不抛错，
-    否则「查找主播」页对没在直播的主播会一直报错）。
+    查不到直播间就当作**未开播**（不抛错，否则「查找主播」页对没在直播的
+    主播会一直报错）。`getRoomInfoOld` 不返回昵称头像，这里补一次
+    `user_card`（只在单个查询时补，批量推送不走这条路径）。
     """
     target = _extract_uid(uid)
     if not target:
         raise BiliError("缺少 UP 主 UID")
     data = await live_statuses([target])
     brief = data.get(target)
-    if brief is not None:
-        brief["mid"] = brief.get("mid") or _int(target)
-        return brief
-    return _live_room_brief({"uid": _int(target), "liveStatus": 0}, mid=target)
+    if brief is None:
+        return _live_room_brief({"uid": _int(target), "liveStatus": 0}, mid=target)
+    brief["mid"] = brief.get("mid") or _int(target)
+    if not brief.get("uname"):
+        try:
+            card = await user_card(target)
+            brief["uname"] = str(card.get("uname") or "")
+            brief["face"] = brief.get("face") or str(card.get("face") or "")
+        except Exception:
+            pass
+    return brief
 
 
 # ---------------- 私信 ----------------
