@@ -30,6 +30,7 @@ from .bili import (
     imgcache,
     live_pusher,
     live_subs,
+    paths,
     pusher,
     sender,
     store,
