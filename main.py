@@ -642,8 +642,8 @@ class BilibiliPusherPlugin(Star):
 
     async def api_cmds_save(self):
         body = await self._body()
-        if not isinstance(body, dict) or not (body.get("sub") or body.get("unsub") or body.get("bind")):
-            return error_response("请求体里没有命令配置（需要 sub / unsub / bind 字段）")
+        if not isinstance(body, dict) or not (body.get("sub") or body.get("unsub") or body.get("bind") or body.get("miniapp")):
+            return error_response("请求体里没有命令配置（需要 sub / unsub / bind / miniapp 字段）")
         try:
             config = cmdsubs.save_cfg(body)
         except Exception as exc:
@@ -725,7 +725,7 @@ class BilibiliPusherPlugin(Star):
                     "push_state": pusher.state_count(),
                 },
                 "cache": {
-                    "page_cache": len(webcache.keys()),
+                    "page_cache": webcache.size(),
                     "images": {"count": img_count, "bytes": img_bytes},
                 },
                 "files": files,
@@ -772,8 +772,8 @@ class BilibiliPusherPlugin(Star):
     # 移植自 astrbot_plugin_bilibili 的 parse_miniapp
     # ==================================================================
 
-    # 是否启用小程序解析（想关掉改成 False 即可）
-    ENABLE_PARSE_MINIAPP = True
+    # 小程序解析开关走 cmdsubs 配置（「命令」页可改，立即生效，落 data/bilibili_cmds.json）。
+    # 运行时一律读 cmdsubs.cfg()["miniapp"]["enabled"]，默认开。
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def parse_miniapp(self, event: AstrMessageEvent):
@@ -781,8 +781,9 @@ class BilibiliPusherPlugin(Star):
 
         覆盖两种结构：meta.detail_1（qqdocurl）与 meta.news（jumpUrl）。
         b23.tv 短链用 client.b23_to_bv 还原成原始链接。
+        开关在「命令」页配置（cmdsubs.miniapp.enabled），改完立即生效。
         """
-        if not self.ENABLE_PARSE_MINIAPP:
+        if not cmdsubs.cfg().get("miniapp", {}).get("enabled", True):
             return
         for msg_element in event.message_obj.message:
             if (

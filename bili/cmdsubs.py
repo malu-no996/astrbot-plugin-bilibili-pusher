@@ -52,6 +52,12 @@ CMD_DEFAULTS: dict = {
     },
 }
 
+# QQ 小程序解析开关（「命令」页可改；不是触发词类命令，单独一条开关）
+MINIAPP_DEFAULT: dict = {
+    "enabled": True,
+    "desc": "自动识别并解析 QQ 聊天中分享的 B 站小程序卡片，提取并返回直链",
+}
+
 # 内置固定命令（@filter.command 静态注册，改不了触发词；「命令」页只读展示）
 STATIC_COMMANDS = [
     {
@@ -128,6 +134,11 @@ def _load() -> None:
                         base = dict(CMD_DEFAULTS[kind])
                         base.update(d)
                         _cmds[kind] = base
+                d = data.get("miniapp")
+                if isinstance(d, dict):
+                    base = dict(MINIAPP_DEFAULT)
+                    base.update({k: d[k] for k in ("enabled",) if k in d})
+                    _cmds["miniapp"] = base
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning(f"bilibili 命令配置读取失败：{exc}")
     try:
@@ -148,6 +159,7 @@ def _load() -> None:
         _cmds.setdefault(kind, dict(CMD_DEFAULTS[kind]))
     for kind in _CMD_KINDS:
         normalize_cmd(_cmds[kind])
+    _cmds.setdefault("miniapp", dict(MINIAPP_DEFAULT))
 
 
 # ---------------- 命令配置 ----------------
@@ -174,7 +186,7 @@ def cfg() -> dict:
 
 
 def save_cfg(body: dict) -> dict:
-    """保存命令配置（只认 sub / unsub / bind 三把钥匙）。返回保存后的配置。"""
+    """保存命令配置（sub / unsub / bind 三把钥匙 + miniapp 开关）。返回保存后的配置。"""
     with _lock:
         for kind in _CMD_KINDS:
             d = body.get(kind)
@@ -182,6 +194,10 @@ def save_cfg(body: dict) -> dict:
                 base = dict(_cmds.get(kind) or CMD_DEFAULTS[kind])
                 base.update({k: d[k] for k in ("enabled", "triggers", "admin_only") if k in d})
                 _cmds[kind] = normalize_cmd(base)
+        m = body.get("miniapp")
+        if isinstance(m, dict):
+            _cmds.setdefault("miniapp", dict(MINIAPP_DEFAULT))
+            _cmds["miniapp"]["enabled"] = bool(m.get("enabled", _cmds["miniapp"]["enabled"]))
         _save_cmds()
         return json.loads(json.dumps(_cmds, ensure_ascii=False))
 

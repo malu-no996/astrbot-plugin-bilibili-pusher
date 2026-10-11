@@ -11,6 +11,7 @@ async function loadCmds() {
       for (const k of ['sub', 'unsub', 'bind']) {
         if (C.config[k]) C.config[k].triggers_raw = (C.config[k].triggers || []).join('，');
       }
+      if (!C.config.miniapp) C.config.miniapp = { enabled: true, desc: '' };
     }
   } else notify(j.message || '读取命令配置失败', 'err');
   C.loading = false;
@@ -30,12 +31,14 @@ async function saveCmds() {
     };
     if (k !== 'bind') body[k].admin_only = !!c.admin_only;   // bind 权限固定，不提交开关
   }
+  body.miniapp = { enabled: !!((C.config.miniapp || {}).enabled) };
   const j = await POST('cmds/save', body);
   if (j.ok) {
     C.config = j.config || C.config;
     for (const k of ['sub', 'unsub']) {
       if (C.config[k]) C.config[k].triggers_raw = (C.config[k].triggers || []).join('，');
     }
+    if (!C.config.miniapp) C.config.miniapp = { enabled: false, desc: '' };
     notify(j.message || '命令配置已保存', 'ok');
   } else notify(j.message || '保存命令配置失败', 'err');
   C.loading = false;
@@ -65,6 +68,13 @@ function renderCmds() {
             placeholder="多个用逗号分隔，例：${k === 'sub' ? '订阅B站推送，订阅UP' : k === 'unsub' ? '取消B站推送，退订UP' : '绑定B站推送，绑定推送'}"></div>
       </div>`;
     }
+    const m = C.config.miniapp || {};
+    html += `<div class="card"><h2>QQ 小程序解析</h2>
+      <p class="muted" style="margin-top:0">${esc(m.desc || '自动识别并解析 QQ 聊天中分享的 B 站小程序卡片，提取并返回直链')}（无需 @机器人，收到小程序卡片即触发）。</p>
+      <div class="row">
+        <label><input type="checkbox" data-model="cmds.config.miniapp.enabled" ${m.enabled ? 'checked' : ''}> 启用</label>
+      </div>
+    </div>`;
     html += `<div class="actions" style="margin-bottom:14px">
       <button data-act="cmdsSave" ${C.loading ? 'disabled' : ''}>保存配置</button>
       <button class="ghost" data-act="cmdsReload" ${C.loading ? 'disabled' : ''}>重新加载</button>
