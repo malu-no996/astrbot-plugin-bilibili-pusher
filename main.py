@@ -14,6 +14,7 @@ origin = "{platform_id}:GroupMessage:{group_id}"。
 import asyncio
 import base64
 import io
+import json
 import re
 
 import httpx
@@ -765,6 +766,60 @@ class BilibiliPusherPlugin(Star):
                 continue
             break
         return t.strip()
+
+    # ==================================================================
+    # QQ 小程序解析：自动识别并解析 QQ 聊天中分享的 B 站小程序，提取并返回直链
+    # 移植自 astrbot_plugin_bilibili 的 parse_miniapp
+    # ==================================================================
+
+    # 是否启用小程序解析（想关掉改成 False 即可）
+    ENABLE_PARSE_MINIAPP = True
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def parse_miniapp(self, event: AstrMessageEvent):
+        """识别 QQ 里分享的 B 站小程序卡片（Json 消息），取直链回复。
+
+        覆盖两种结构：meta.detail_1（qqdocurl）与 meta.news（jumpUrl）。
+        b23.tv 短链用 client.b23_to_bv 还原成原始链接。
+        """
+        if not self.ENABLE_PARSE_MINIAPP:
+            return
+        for msg_element in event.message_obj.message:
+            if (
+                hasattr(msg_element, "type")
+                and getattr(msg_element, "type", None) == "Json"
+                and hasattr(msg_element, "data")
+            ):
+                json_string = getattr(msg_element, "data", None)
+                try:
+                    parsed_data = (
+                        json_string
+                        if isinstance(json_string, dict)
+                        else json.loads(json_string)
+                    )
+                    meta = parsed_data.get("meta", {})
+
+                    detail_1 = meta.get("detail_1", {})
+                    title = detail_1.get("title")
+                    qqdocurl = detail_1.get("qqdocurl")
+                    desc = detail_1.get("desc")
+                    if title == "哔哩哔哩" and qqdocurl:
+                        if "https://b23.tv" in qqdocurl:
+                            qqdocurl = await client.b23_to_bv(qqdocurl)
+                        yield event.plain_result(f"标题: {desc}\n链接: {qqdocurl}")
+
+                    news = meta.get("news", {})
+                    tag = news.get("tag", "")
+                    jumpurl = news.get("jumpUrl", "")
+                    news_title = news.get("title", "")
+                    if tag == "哔哩哔哩" and jumpurl:
+                        if "https://b23.tv" in jumpurl:
+                            jumpurl = await client.b23_to_bv(jumpurl)
+                        yield event.plain_result(f"标题: {news_title}\n链接: {jumpurl}")
+                except json.JSONDecodeError:
+                    logger.error(f"QQ小程序解析失败，JSON 无法解析: {json_string}")
+                except Exception as e:
+                    logger.error(f"QQ小程序解析出错: {e}")
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def bili_sub_cmd_listener(self, event: AstrMessageEvent):

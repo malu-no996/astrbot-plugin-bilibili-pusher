@@ -177,6 +177,33 @@ def _vc_data(resp: httpx.Response) -> dict:
     return _dict(payload.get("data"))
 
 
+# ---------------- b23 短链转原始链接 ----------------
+
+async def b23_to_bv(url: str) -> str:
+    """b23.tv 短链 → 原始链接（视频 / 空间等）。
+
+    b23 用 302 跳转到真实地址，请求**不跟随重定向**直接读 Location 头即可。
+    失败返回原 url，不抛异常（解析小程序时这条失败不应阻断回复）。
+    """
+    try:
+        resp = await get_client().get(
+            url,
+            headers={
+                "User-Agent": UA,
+                "Accept": "*/*",
+            },
+            follow_redirects=False,
+            timeout=10,
+        )
+        if 300 <= resp.status_code < 400:
+            loc = resp.headers.get("Location")
+            if loc:
+                return loc.split("?", 1)[0]
+    except Exception as exc:
+        logger.error(f"解析 b23 链接失败 (URL: {url}): {exc}")
+    return url
+
+
 # ---------------- 设备指纹 ----------------
 
 _buvid: dict = {}
