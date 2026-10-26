@@ -15,13 +15,18 @@ main.py 在插件初始化时调 bind(context)；pusher / live_pusher 只 import
 """
 from __future__ import annotations
 
+from loguru import logger
+
+from . import qqbot
+
 _context = None
 
 
 def bind(context) -> None:
-    """插件启动时绑定 AstrBot Context。"""
+    """插件启动时绑定 AstrBot Context（官方直连通道 qqbot 也要用）。"""
     global _context
     _context = context
+    qqbot.bind(context)
 
 
 def session_of(platform_id: str, group_id: str) -> str:
@@ -80,14 +85,28 @@ async def send_group(
     from astrbot.core.message.message_event_result import MessageChain
 
     ptype = platform_type(platform_id)
-    if ptype.startswith("qq_official") and markdown:
-        # QQ 官方机器人：markdown 通道，封面外链写进文案（紧跟标题行）。
-        md = markdown
-        if cover:
-            from . import mdgen
-            md = await mdgen.md_with_cover(md, cover)
-        chain = MessageChain(chain=[Plain(md)])
-        chain.use_markdown_ = True          # 强制走 msg_type=2；失败适配器自动退纯文本
+    if ptype.startswith("qq_official"):
+        # QQ 官方机器人：**直连 botpy** 发，不走 context.send_message。
+        # 原因见 bili/qqbot.py 模块头：适配器在没有 msg_id / scene 缓存时会把主动
+        # 推送**静默丢弃**，而且丢弃时是 `return`（返回 None，不是 False）——
+        # 下面那个 `ok is False` 根本判不出来，推送丢了还以为发成功了。
+        if await _send_official_direct(platform_id, group_id, text, markdown, cover):
+            return
+        # 拿不到 botpy（client 未就绪 / 版本差异）→ 补场景缓存后走原来的消息链通道
+        if not qqbot.warm_group_scene(platform_id, group_id):
+            logger.warning(f"B站推送：官方实例拿不到 botpy、也补不了场景缓存"
+                           f"（platform={platform_id}）—— 本条推送可能被适配器静默丢弃")
+        if markdown:
+            # markdown 通道：封面外链写进文案（紧跟标题行）
+            md = markdown
+            if cover:
+                from . import mdgen
+                md = await mdgen.md_with_cover(md, cover)
+            chain = MessageChain(chain=[Plain(md)])
+            chain.use_markdown_ = True      # 强制走 msg_type=2；失败适配器自动退纯文本
+        else:
+            chain = MessageChain(chain=[Plain(text)])
+            chain.use_markdown_ = False
     else:
         # 其他平台（aiocqhttp 等）：普通「文字 + 图片」，明确不发 markdown。
         comps = [Plain(text)]
@@ -103,3 +122,29 @@ async def send_group(
             f"消息发送失败（platform={platform_id}, group={group_id}）："
             "请确认平台实例 ID 正确、平台已连接，且群 ID 是该平台群消息事件里的 session_id"
         )
+
+
+async def _send_official_direct(platform_id: str, group_id: str, text: str,
+                                markdown: str, cover: str) -> bool:
+    """官方群**直连 botpy** 发一条：markdown（`msg_type=2`）→ 失败退纯文本。
+
+    返回 True = 已发出（调用方直接结束）；False = 拿不到 botpy，调用方走老路。
+
+    主动推送不需要 `msg_id`（官方按「有没有 msg_id」区分主动/被动），所以这里
+    不带 msg_id —— 这也正是绕开适配器那条「没缓存就 skip」门禁的关键。
+    """
+    if qqbot.api_of(platform_id) is None:
+        return False
+    if str(markdown or "").strip():
+        md = markdown
+        if cover:
+            from . import mdgen
+            md = await mdgen.md_with_cover(md, cover)
+        try:
+            await qqbot.post_group_markdown(platform_id, group_id, md)
+            return True
+        except Exception as exc:                     # noqa: BLE001
+            logger.warning(f"B站推送：官方 markdown 直连失败，退回纯文本：{exc}")
+    # 纯文本兜底：这里失败就让它抛出去，由调用方记进本轮错误摘要
+    await qqbot.post_group_text(platform_id, group_id, text)
+    return True
